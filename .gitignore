@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+uploads/*
+!uploads/.gitkeep
+data/*
+!data/shankeshwaram/
+!data/shankeshwaram/**
+data/shankeshwaram/_generated/
+!data/celebria/
+!data/celebria/**
+data/celebria/_generated/

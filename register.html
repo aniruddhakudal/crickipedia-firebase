@@ -1,0 +1,1551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Player Registration</title>
+<script>(function(){try{var t=localStorage.getItem("crickipedia_ui_theme");document.documentElement.setAttribute("data-ui-theme",t==="dark"?"dark":"bright");}catch(e){}})();</script>
+<link rel="stylesheet" href="/cricket-theme.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+.hero-toolbar{display:flex;justify-content:flex-end;padding:12px 0 0;position:relative;z-index:2}
+.hero{color:var(--text-on-hero);padding:28px 0 56px;position:relative;overflow:hidden}
+.hero:before{content:"";position:absolute;inset:0;pointer-events:none}
+.hero:after{content:attr(data-emoji);position:absolute;right:4%;bottom:-40px;font-size:200px;opacity:.07;transform:rotate(-12deg);pointer-events:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+.brand{display:flex;align-items:center;gap:16px;position:relative;z-index:1}
+.logo{width:64px;height:64px;border-radius:18px;background:#fff;color:var(--green);display:grid;place-items:center;font-size:32px;font-weight:800;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+.logo img{width:100%;height:100%;object-fit:cover}
+.brand h1{margin:0;font-size:1.35rem;font-weight:800;letter-spacing:-.02em}
+.brand p{margin:4px 0 0;opacity:.8;font-size:.95rem}
+.hero-copy{position:relative;z-index:1;max-width:640px;margin-top:36px}
+.hero h2{font-size:clamp(1.75rem,4vw,2.35rem);font-weight:800;line-height:1.15;margin:0 0 12px;letter-spacing:-.03em}
+.hero .sub{font-size:1.05rem;opacity:.9;margin:0;line-height:1.55}
+.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px}
+.badge{background:rgba(255,255,255,.14);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.22);padding:8px 14px;border-radius:999px;font-size:.8rem;font-weight:600}
+.badge.hero-fee-cat.badge-active{background:rgba(255,255,255,.26);border-color:rgba(255,215,120,.55);box-shadow:0 0 0 1px rgba(255,215,120,.25)}
+#heroFeeBadges{display:contents}
+.grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,.75fr);gap:28px;margin-top:-32px;position:relative;z-index:2;padding-bottom:40px}
+.card{background:var(--surface);border-radius:24px;padding:28px;box-shadow:var(--shadow);margin-bottom:24px;border:1px solid var(--line)}
+.card h3{margin:0;font-size:1.2rem;font-weight:800;letter-spacing:-.02em}
+.card-head{margin-bottom:22px}
+.card-head p{margin:6px 0 0;color:var(--muted);font-size:.9rem}
+.notice{background:var(--notice-bg);border:1px solid var(--notice-border);border-radius:14px;padding:16px 18px;margin-bottom:24px;font-size:.92rem;line-height:1.5}
+.notice strong{display:block;margin-bottom:4px;font-size:.95rem}
+form{display:flex;flex-direction:column;gap:28px}
+.form-section{display:flex;flex-direction:column;gap:16px}
+.ordered-form-fields{display:flex;flex-direction:column;gap:16px}
+.form-section-title{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--green);margin:0}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+label{font-weight:600;font-size:.88rem;display:grid;gap:8px;color:var(--text)}
+label .opt{font-weight:500;color:var(--muted);font-size:.8rem}
+input,select{width:100%;padding:14px 16px;border:1px solid var(--line);border-radius:14px;font-size:1rem;font-family:inherit;background:var(--input-bg);color:var(--text);outline:none;transition:border .15s,box-shadow .15s}
+input:focus,select:focus{border-color:var(--green2);background:var(--surface);box-shadow:0 0 0 4px var(--focus-ring)}
+.skills{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:520px){.skills{grid-template-columns:repeat(4,1fr)}}
+.skill input{display:none}
+.skill span{display:flex;align-items:center;justify-content:center;min-height:52px;text-align:center;padding:12px 8px;border:2px solid var(--line);border-radius:14px;font-weight:700;font-size:.82rem;cursor:pointer;transition:all .15s}
+.skill input:checked+span{box-shadow:0 4px 12px var(--focus-ring)}
+.photo{border:2px dashed var(--line);border-radius:16px;padding:20px;text-align:center;color:var(--muted)}
+.photo img{display:none;max-width:120px;max-height:120px;border-radius:16px;margin:12px auto 0}
+.profile-upload{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.profile-preview{width:88px;height:88px;border-radius:50%;border:2px dashed var(--line);display:grid;place-items:center;font-size:2rem;flex-shrink:0;overflow:hidden;color:var(--muted);padding:0;cursor:pointer;font-family:inherit;background:transparent}
+.profile-preview:focus-visible{outline:2px solid var(--green2);outline-offset:3px}
+.profile-preview img{width:100%;height:100%;object-fit:cover;display:block}
+.profile-upload-actions{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;flex:1}
+.profile-upload-actions .pick-photo{display:inline-flex;align-items:center;justify-content:center;padding:10px 18px;border-radius:12px;font-weight:800;font-size:.88rem;cursor:pointer;font-family:inherit;border:0}
+.profile-photo-menu{display:flex;flex-wrap:wrap;gap:8px;width:100%}
+.profile-photo-menu.hidden{display:none!important}
+.profile-photo-menu .pick-photo.secondary{background:var(--input-bg);color:var(--text);border:1px solid var(--line);box-shadow:none}
+.profile-hint{margin:0;font-size:.82rem;color:var(--muted);max-width:28ch;line-height:1.4}
+.profile-upload input[type=file]{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+.fee-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px;border-radius:16px;color:#fff}
+.fee-strip .label{font-size:.8rem;opacity:.75;margin-bottom:4px}
+.fee-strip .amount{font-size:1.75rem;font-weight:800;color:var(--gold);letter-spacing:-.02em}
+.fee-strip .tag{font-size:.75rem;font-weight:700;background:rgba(255,255,255,.12);padding:8px 12px;border-radius:999px;white-space:nowrap}
+.btn{border:0;border-radius:14px;padding:15px 20px;font-weight:800;font-size:.95rem;cursor:pointer;font-family:inherit;transition:transform .1s,filter .15s}
+.btn:active{transform:scale(.98)}
+.primary{width:100%}
+.primary:hover{filter:brightness(1.06)}
+.ghost{width:100%}
+.wa{background:#25d366;color:#fff;width:100%;text-decoration:none;display:flex;align-items:center;justify-content:center;min-height:48px}
+.wa:hover{filter:brightness(.96)}
+.wa.secondary{background:#128c7e}
+.sponsors{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.sponsor{border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center;font-weight:700;font-size:.85rem}
+.sponsor img{max-height:36px;max-width:100%;display:block;margin:0 auto 8px}
+.jersey-size-sample{margin-top:12px;text-align:center}
+.jersey-size-sample img{display:block;width:100%;max-width:min(100%,340px);max-height:280px;margin:0 auto;object-fit:contain;border-radius:12px;border:1px solid var(--line);cursor:zoom-in}
+.sponsor-footer{margin:0 auto 28px;max-width:1080px;padding:0 20px}
+.sponsor-footer.hidden{display:none!important}
+.sponsor-footer-title{text-align:center;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 14px}
+.sponsor-carousel-mask{overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
+.sponsor-carousel-track{display:flex;gap:32px;align-items:center;width:max-content;animation:sponsor-scroll 40s linear infinite}
+.sponsor-carousel-track:hover{animation-play-state:paused}
+.sponsor-carousel-item{flex:0 0 auto;display:flex;align-items:center;justify-content:center;min-width:120px;max-width:160px;padding:8px 12px}
+.sponsor-carousel-item img{max-height:48px;max-width:140px;object-fit:contain;display:block}
+.sponsor-carousel-item span{font-weight:700;font-size:.85rem;color:var(--text)}
+@keyframes sponsor-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.aside-card h3{font-size:1rem;margin-bottom:16px}
+.info-grid{display:grid;gap:12px}
+.info-chip{padding:14px 16px;border-radius:14px;border:1px solid var(--line)}
+.info-chip strong{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
+.info-chip span{font-size:.95rem;font-weight:600}
+.muted{color:var(--muted);font-size:.88rem}
+.footer{text-align:center;padding:32px 20px 48px;color:var(--muted);font-size:.85rem}
+.success{display:none}
+.success-inner{max-width:520px;margin:0 auto;text-align:center}
+.success .check{font-size:3.5rem;line-height:1;margin-bottom:8px}
+.success h2{margin:0 0 8px;font-size:1.5rem;font-weight:800;letter-spacing:-.02em}
+.success .lead{margin:0 0 20px;color:var(--muted);font-size:.95rem;line-height:1.5}
+.regid{font-size:1.35rem;font-weight:800;padding:18px 20px;border-radius:16px;margin:0 0 16px;letter-spacing:.02em;border:1px solid var(--regid-border)}
+.hidden{display:none!important}
+.hint{background:#eef9f4;border-radius:14px;padding:14px 16px;font-size:.88rem;line-height:1.45;border:1px solid #d4eddf}
+.hint a,.hint button.link{color:var(--green);font-weight:700;background:none;border:0;padding:0;cursor:pointer;font-size:inherit}
+.status-pill{display:inline-block;padding:8px 14px;border-radius:999px;font-size:.8rem;font-weight:800}
+.status-pending{background:#fff4d6;color:#8a5a00}
+.status-paid{background:#e8f7f0;color:var(--green)}
+.actions{display:grid;gap:10px;margin-top:24px}
+.actions-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions-row .btn,.actions-row .wa{min-height:48px}
+.pay-note{margin:20px 0 0;font-size:.85rem;line-height:1.45}
+.manual-pay-panel{text-align:left;margin-top:24px;padding:22px;border-radius:18px;background:#f8fbf9;border:1px solid var(--line)}
+.manual-pay-panel h3{margin:0 0 8px;font-size:1.05rem}
+.manual-pay-panel #qrWrap img{max-width:260px;border-radius:12px;box-shadow:var(--shadow)}
+.closed{text-align:center;padding:24px 12px}
+.closed .big{font-size:3rem;line-height:1}
+.tourney-links{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+.tourney-links a{color:var(--green);font-weight:700;text-decoration:none;padding:6px 12px;background:#fff;border-radius:999px;border:1px solid var(--line);font-size:.85rem}
+.tourney-links a:hover{background:#eef9f4}
+.cricket-ui .aside-card .btn.roster-open,
+.cricket-ui .aside-card .btn.stats-open{
+  width:100%;
+  margin-top:10px;
+  display:block;
+  text-align:center;
+  text-decoration:none;
+  box-sizing:border-box;
+  background:var(--surface,#fff)!important;
+  color:var(--green,#00875a)!important;
+  border:2px solid var(--green2,#00c17c)!important;
+  box-shadow:0 4px 14px rgba(0,135,90,.12)!important;
+  filter:none!important;
+}
+.cricket-ui .aside-card .btn.roster-open{margin-top:4px}
+.cricket-ui .aside-card .btn.roster-open:hover,
+.cricket-ui .aside-card .btn.stats-open:hover{
+  background:#eef9f4!important;
+  filter:none!important;
+}
+.cricket-ui .aside-card .btn.roster-open:focus-visible,
+.cricket-ui .aside-card .btn.stats-open:focus-visible{
+  outline:2px solid var(--green2);
+  outline-offset:2px;
+}
+html[data-ui-theme="dark"] .cricket-ui .aside-card .btn.roster-open,
+html[data-ui-theme="dark"] .cricket-ui .aside-card .btn.stats-open{
+  background:var(--input-bg,#0f1e30)!important;
+  color:var(--green,#3dffa8)!important;
+  border-color:var(--green2,#22e890)!important;
+  box-shadow:0 4px 18px rgba(0,0,0,.35)!important;
+}
+html[data-ui-theme="dark"] .cricket-ui .aside-card .btn.roster-open:hover,
+html[data-ui-theme="dark"] .cricket-ui .aside-card .btn.stats-open:hover{
+  background:rgba(61,255,168,.1)!important;
+}
+.roster-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0}
+.roster-modal.hidden{display:none!important}
+.roster-backdrop{position:absolute;inset:0;background:rgba(7,27,22,.45)}
+.roster-panel{position:relative;width:100%;max-width:920px;max-height:min(88vh,720px);background:#fff;color:#0a2e24;border-radius:20px 20px 0 0;box-shadow:0 -8px 40px rgba(7,27,22,.18);display:flex;flex-direction:column;overflow:hidden;--text:#0a2e24;--muted:#4a6358;--green:#00875a;--green2:#00a86b;--dark:#071b16;--line:#d4e8de}
+@media(min-width:640px){.roster-modal{align-items:center;padding:20px}.roster-panel{border-radius:20px;max-height:85vh}}
+.roster-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;border-bottom:1px solid var(--line)}
+.roster-head h3{margin:0;font-size:1.1rem;font-weight:800;color:#0a2e24}
+.roster-close{border:0;background:#eef4f1;width:36px;height:36px;border-radius:10px;font-size:1.25rem;cursor:pointer;line-height:1;color:var(--dark)}
+.roster-tabs{display:flex;gap:8px;padding:12px 16px 0;overflow-x:auto;border-bottom:1px solid var(--line);flex-shrink:0}
+.roster-tab{border:0;background:transparent;padding:10px 14px;font-weight:800;font-size:.85rem;color:var(--muted);cursor:pointer;border-radius:10px 10px 0 0;font-family:inherit;white-space:nowrap}
+.roster-tab.active{color:var(--green);background:#eef9f4;box-shadow:inset 0 -2px 0 var(--green2)}
+.roster-body{padding:16px 16px 24px;overflow:auto;flex:1}
+.roster-table{width:100%;border-collapse:collapse;font-size:.88rem}
+.roster-table th{text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--line)}
+.roster-table td{padding:10px;border-bottom:1px solid #f0f4f2;vertical-align:middle;color:#0a2e24}
+.roster-table td strong{font-weight:800;color:#071b16}
+.roster-table tr:last-child td{border-bottom:0}
+.roster-photo{width:40px;height:40px;border-radius:50%;object-fit:cover;background:#e8f0eb;display:block}
+.roster-photo-placeholder{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#e0f5ea,#c5e8d4);color:var(--green);font-weight:800;font-size:.85rem;display:grid;place-items:center}
+.roster-status{display:inline-block;padding:4px 10px;border-radius:999px;font-size:.75rem;font-weight:800}
+.roster-status-confirmed{background:#e8f7f0;color:var(--green)}
+.roster-status-pending{background:#fff6e6;color:#9a6700}
+.roster-status-reserved{background:#e2ebe6;color:#3d5248}
+.roster-empty{text-align:center;padding:32px 16px;color:var(--muted)}
+.page-loading{text-align:center;padding:48px 24px;color:var(--muted)}
+.page-loading .spinner{width:40px;height:40px;margin:0 auto 16px;border:3px solid var(--line);border-top-color:var(--green2);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:520px){
+  .roster-table thead{display:none}
+  .roster-table tr{display:grid;grid-template-columns:40px 1fr;gap:4px 12px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .roster-table td{padding:0;border:0}
+  .roster-table td[data-label]{grid-column:2}
+  .roster-table td.roster-cell-photo{grid-row:span 3}
+}
+@media(max-width:860px){
+  .grid{grid-template-columns:1fr;margin-top:0;padding-top:8px}
+  .hero{padding-bottom:40px}
+  .card{padding:22px 20px;border-radius:20px}
+  .row{grid-template-columns:1fr}
+  aside.aside-first{order:-1}
+}
+</style>
+</head>
+<body class="cricket-ui">
+<div class="cricket-wm-corner cricket-wm-corner--tl" aria-hidden="true">🧤</div>
+<div class="cricket-wm-corner cricket-wm-corner--br" aria-hidden="true">🎯</div>
+<header class="hero" id="hero">
+  <div class="wrap hero-toolbar">
+    <button type="button" class="ui-theme-toggle" data-ui-theme-toggle aria-label="Toggle theme">🌙 Dark</button>
+  </div>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo" id="logo">🏏</div>
+      <div>
+        <h1 id="tName">Tournament</h1>
+        <p id="tTagline">Official Player Registration</p>
+      </div>
+    </div>
+    <div class="hero-copy">
+      <h2 id="heroTitle"></h2>
+      <p class="sub" id="heroSub"></p>
+      <div class="badges" id="badges"></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap grid">
+  <section>
+    <div class="card hidden" id="apiDown">
+      <div class="closed">
+        <div class="big">🔌</div>
+        <h2>Can't reach the server</h2>
+        <p class="muted">Start Postgres and <code>npm start</code>, then refresh. Registration is saved in the database, not in this browser.</p>
+      </div>
+    </div>
+    <div class="card hidden" id="pageLoading">
+      <div class="page-loading">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading registration…</p>
+      </div>
+    </div>
+    <div class="card hidden" id="gateCard">
+      <div class="closed">
+        <div class="big" id="gateEmoji">🏏</div>
+        <h2 id="gateTitle">Coming soon</h2>
+        <p class="muted" id="gateText"></p>
+      </div>
+    </div>
+
+    <div class="card hidden" id="formCard">
+      <div class="notice">
+        <strong id="noticeTitle">Important</strong>
+        <span id="noticeText"></span>
+      </div>
+      <div class="hint hidden" id="dupHint"></div>
+      <div class="card-head">
+        <h3>Register in under a minute</h3>
+        <p>Enter your details. We’ll save your spot and message you on WhatsApp.</p>
+      </div>
+      <form id="regForm">
+        <div class="form-section">
+          <p class="form-section-title">Your details</p>
+          <div class="row">
+            <label>Full name *
+              <input id="name" required maxlength="150" autocomplete="name" placeholder="Enter your name">
+            </label>
+            <label>WhatsApp number *
+              <input id="phone" type="tel" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required placeholder="10 digits">
+            </label>
+          </div>
+          <div id="orderedFormFields" class="ordered-form-fields"></div>
+        </div>
+        <div class="form-section">
+          <p class="form-section-title">Playing role</p>
+          <label>Skill *
+            <div class="skills" id="skills"></div>
+          </label>
+        </div>
+        <div class="form-section hidden" id="formPaymentSection">
+          <p class="form-section-title">Pay entry fee</p>
+          <p class="muted" id="formPaymentInstructions"></p>
+          <div id="formQrWrap" style="text-align:center;margin:14px 0"></div>
+          <label class="hidden" id="formReceiptImageLabel"><span id="formReceiptImageLabelText">Payment receipt screenshot *</span>
+            <input id="formReceiptFile" type="file" accept="image/*">
+          </label>
+          <label class="hidden" id="formReceiptUpiLabel" style="margin-top:12px;display:grid"><span id="formReceiptUpiLabelText">UPI transaction ID</span>
+            <input id="formReceiptUpi" placeholder="e.g. 123456789012">
+          </label>
+        </div>
+        <div class="form-section">
+          <div class="fee-strip">
+            <div>
+              <div class="label" id="feeStripLabel">Entry fee — pay after you register</div>
+              <div class="amount" id="feeAmount">₹0</div>
+            </div>
+            <div class="tag">⚡ Instant confirmation</div>
+          </div>
+          <button class="btn primary" type="submit" id="submitBtn">Register now</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card success" id="success">
+      <div class="success-inner">
+        <div class="check" id="successEmoji">✅</div>
+        <h2 id="successTitle">Registration complete</h2>
+        <p class="lead" id="successText">Your spot will be confirmed once the admin verifies your payment.</p>
+        <div class="hidden"><span class="status-pill status-pending" id="payPill">Reserved</span></div>
+        <div class="manual-pay-panel hidden" id="manualPayBox">
+          <h3>Pay entry fee</h3>
+          <p class="muted" id="manualPayInstructions"></p>
+          <div id="qrWrap" style="text-align:center;margin:16px 0"></div>
+          <label class="hidden" id="receiptImageLabel">Receipt screenshot *
+            <input id="receiptFile" type="file" accept="image/*">
+          </label>
+          <label class="hidden" id="receiptUpiLabel" style="margin-top:12px;display:grid">UPI transaction ID
+            <input id="receiptUpi" placeholder="e.g. 123456789012">
+          </label>
+          <button class="btn primary hidden" type="button" id="submitReceiptBtn" style="margin-top:14px">Submit receipt</button>
+          <p class="muted" id="receiptStatus" style="margin-top:10px"></p>
+        </div>
+        <div class="actions">
+          <p class="hint hidden" id="categoryGroupHint" style="text-align:center;margin:0 0 4px"></p>
+          <a class="btn wa hidden" id="waCategoryGroup" href="#" target="_blank" rel="noopener">Join WhatsApp group</a>
+          <button class="btn primary" type="button" id="payBtn">Pay now</button>
+          <a class="btn wa" id="waShare" href="https://wa.me/" target="_blank" rel="noopener">Share on WhatsApp</a>
+          <a class="btn wa secondary hidden" id="waDesk" href="https://wa.me/" target="_blank" rel="noopener">Message tournament desk</a>
+          <div class="photo hidden" id="successPhoto">
+            <span style="font-weight:600;display:block;margin-bottom:10px">Update profile picture</span>
+            <div class="profile-photo-menu" id="successPhotoMenu">
+              <button type="button" class="pick-photo" id="photoLaterUploadBtn">Upload photo</button>
+              <button type="button" class="pick-photo secondary" id="photoLaterCameraBtn">Take picture</button>
+            </div>
+            <input id="photoLater" type="file" accept="image/jpeg,image/png,image/webp,image/*">
+            <input id="photoLaterCamera" type="file" accept="image/*" capture="user">
+            <img id="previewLater" alt="">
+          </div>
+          <button class="btn ghost" type="button" id="anotherBtn">Register another player</button>
+        </div>
+        <p class="muted pay-note" id="payNote">Pay securely with UPI, cards, or netbanking.</p>
+      </div>
+    </div>
+  </section>
+
+  <aside class="aside-first">
+    <div class="card aside-card">
+      <h3>📌 At a glance</h3>
+      <div class="info-grid">
+        <div class="info-chip"><strong>Registration</strong><span id="infoDates"></span></div>
+        <div class="info-chip"><strong>Entry fee</strong><span id="infoFee"></span></div>
+        <div class="info-chip"><strong>How it works</strong><span>Register → pay → confirmed</span></div>
+        <div class="info-chip hidden" id="infoWa"><strong>Questions?</strong><a id="infoWaLink" href="https://wa.me/" target="_blank" rel="noopener" style="color:var(--green);font-weight:700;text-decoration:none">Message the desk</a></div>
+      </div>
+      <button type="button" class="btn roster-open" id="rosterOpenBtn">View registered players</button>
+      <a class="btn stats-open" id="ledgerLink" href="#">Balance Sheet</a>
+      <a class="btn stats-open hidden" id="statsLink" href="#">View season stats</a>
+      <a class="btn stats-open hidden" id="playersSearchLink" href="#">Search player stats</a>
+    </div>
+    <div class="card">
+      <h3>🏆 What's Next?</h3>
+      <p class="muted" id="whatsNext"></p>
+    </div>
+  </aside>
+</main>
+
+<div class="roster-modal hidden" id="rosterModal" role="dialog" aria-modal="true" aria-labelledby="rosterTitle">
+  <div class="roster-backdrop" id="rosterBackdrop" tabindex="-1"></div>
+  <div class="roster-panel">
+    <div class="roster-head">
+      <h3 id="rosterTitle">Registered players</h3>
+      <button type="button" class="roster-close" id="rosterCloseBtn" aria-label="Close">×</button>
+    </div>
+    <div class="roster-tabs" id="rosterTabs" role="tablist"></div>
+    <div class="roster-body" id="rosterBody">
+      <p class="roster-empty">Loading…</p>
+    </div>
+  </div>
+</div>
+
+<div class="sponsor-footer hidden" id="sponsorFooter" aria-label="Sponsors">
+  <p class="sponsor-footer-title">Our sponsors</p>
+  <div class="sponsor-carousel-mask">
+    <div class="sponsor-carousel-track" id="sponsorCarouselTrack"></div>
+  </div>
+</div>
+
+<footer class="footer">
+  <div id="footerText"></div>
+  <div class="tourney-links"><a href="/">← Crickipedia home</a><span id="otherTournaments"></span></div>
+</footer>
+
+<script type="application/json" id="crickipedia-bootstrap"></script>
+<script src="/app.js"></script>
+<script>
+(async function () {
+  var C = Crickipedia;
+  C.initUiThemeToggle();
+  var preview = C.queryParam("preview") === "1";
+  var currentRecord = null;
+  var skipSuccessPaymentQr = false;
+  var photoFile = null;
+  var paymentCfg = null;
+  var suppressPayPanels = false;
+  var all = [];
+  var tournament = null;
+
+  function readBootstrap() {
+    var el = document.getElementById("crickipedia-bootstrap");
+    if (!el) return null;
+    var text = (el.textContent || "").trim();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var bootstrap = readBootstrap();
+  if (bootstrap && bootstrap.preview) preview = true;
+
+  var parsed = C.parsePublicUrl();
+  var hasDirectRef = (parsed.tournament && parsed.season) || parsed.legacySlug;
+  var pageLoading = document.getElementById("pageLoading");
+  if (!bootstrap || !bootstrap.tournament) {
+    pageLoading.classList.remove("hidden");
+  }
+
+  try {
+    if (bootstrap && bootstrap.tournament) {
+      tournament = bootstrap.tournament;
+      paymentCfg = bootstrap.paymentConfig || null;
+    } else if (hasDirectRef) {
+      if (parsed.tournament && parsed.season) {
+        var cfg = await C.api.config({ tournamentSlug: parsed.tournament, seasonSlug: parsed.season }, preview);
+        tournament = cfg.tournament;
+        paymentCfg = cfg.paymentConfig || null;
+      } else {
+        var cfgLegacy = await C.api.config(parsed.legacySlug, preview);
+        tournament = cfgLegacy.tournament;
+        paymentCfg = cfgLegacy.paymentConfig || null;
+      }
+    } else {
+      all = await C.api.listPublic(preview);
+      tournament = C.resolvePublicTournament(all);
+      if (tournament) {
+        paymentCfg = tournament.paymentConfig != null ? tournament.paymentConfig : null;
+        if (paymentCfg == null) {
+          var cfgList = await C.api.config(tournament, preview);
+          tournament = cfgList.tournament;
+          paymentCfg = cfgList.paymentConfig || null;
+        }
+      }
+    }
+  } catch (err) {
+    pageLoading.classList.add("hidden");
+    document.getElementById("formCard").classList.add("hidden");
+    document.getElementById("apiDown").classList.remove("hidden");
+    return;
+  }
+  pageLoading.classList.add("hidden");
+  if (!tournament) {
+    pageLoading.classList.add("hidden");
+    document.getElementById("formCard").classList.add("hidden");
+    document.getElementById("apiDown").classList.remove("hidden");
+    document.querySelector("#apiDown h2").textContent = "No tournament found";
+    return;
+  }
+  var state = C.publicState(tournament);
+
+  document.title = tournament.name + " — Register";
+  document.getElementById("hero").setAttribute("data-emoji", tournament.logoEmoji || "🏏");
+  if (tournament.logoUrl) {
+    document.getElementById("logo").innerHTML = '<img alt="" src="' + C.escapeHtml(tournament.logoUrl) + '">';
+  } else {
+    document.getElementById("logo").textContent = tournament.logoEmoji || "🏏";
+  }
+  document.getElementById("tName").textContent = tournament.name;
+  document.getElementById("tTagline").textContent = tournament.tagline || "Official Player Registration";
+  document.getElementById("heroTitle").innerHTML = C.nl2br(tournament.heroTitle || "Register now");
+  document.getElementById("heroSub").textContent = tournament.heroSub || "";
+  document.getElementById("noticeTitle").textContent = tournament.noticeTitle || "Important";
+  document.getElementById("noticeText").textContent = tournament.notice || "";
+  function selectedCategoryName() {
+    var el = document.getElementById("category");
+    var cat = el ? el.value.trim() : "";
+    return cat || undefined;
+  }
+  function renderHeroFeeBadges(selectedCat) {
+    var cats = C.normalizeCategories(tournament.categories);
+    var sel = selectedCat ? String(selectedCat).trim().toLowerCase() : "";
+    var feeHtml;
+    if (cats.length && C.categoryFeesConfigured(tournament)) {
+      feeHtml = cats.map(function (c) {
+        var name = c.name;
+        var active = sel && String(name).trim().toLowerCase() === sel;
+        var fee = C.formatMoney(tournament, name);
+        return '<span class="badge hero-fee-cat' + (active ? " badge-active" : "") + '" data-cat-fee="' + C.escapeHtml(name) + '">💰 ' +
+          C.escapeHtml(name) + " " + C.escapeHtml(fee) + "</span>";
+      }).join("");
+    } else {
+      feeHtml = '<span class="badge hero-fee-cat">💰 Entry fee ' + C.escapeHtml(C.formatMoney(tournament)) + "</span>";
+    }
+    var wrap = document.getElementById("heroFeeBadges");
+    if (wrap) wrap.innerHTML = feeHtml;
+  }
+
+  function updateFeeDisplay() {
+    var cat = selectedCategoryName();
+    renderHeroFeeBadges(cat);
+    if (!cat && C.categoryFeesConfigured(tournament)) {
+      document.getElementById("feeAmount").textContent = C.feeRangeLabel(tournament);
+      document.getElementById("infoFee").textContent = "Select a category — fees listed above";
+      document.getElementById("payBtn").textContent = "Pay after you register";
+      return;
+    }
+    var amount = C.formatMoney(tournament, cat);
+    document.getElementById("feeAmount").textContent = amount;
+    document.getElementById("infoFee").textContent = cat ? amount + " (" + cat + ")" : amount + " per player";
+    document.getElementById("payBtn").textContent = "Pay " + amount + " now";
+  }
+  document.getElementById("infoDates").textContent = C.formatDateRange(tournament);
+  document.getElementById("whatsNext").textContent = tournament.whatsNext || "";
+  document.getElementById("footerText").textContent = "© 2026 " + (tournament.shortName || tournament.name) + " • Crickipedia";
+
+  function applyPaymentUi(cfg) {
+    if (!cfg) return;
+    var feeTag = document.querySelector(".fee-strip .tag");
+    var payBtn = document.getElementById("payBtn");
+    if (cfg.mode === "manual_qr") {
+      document.getElementById("payNote").textContent = "Scan the QR, pay, then upload your receipt for verification.";
+      payBtn.classList.add("hidden");
+      if (feeTag) feeTag.textContent = "📎 Receipt verification";
+      setupFormPaymentUi();
+    } else if (cfg.mode === "razorpay") {
+      payBtn.classList.remove("hidden");
+      if (cfg.razorpayAvailable === false) {
+        document.getElementById("payNote").textContent = "Online checkout is not available yet. Contact the organizer.";
+      } else {
+        document.getElementById("payNote").textContent = "Pay securely with Razorpay — UPI, cards, or netbanking.";
+      }
+      document.getElementById("feeStripLabel").textContent = "Entry fee — pay with Razorpay after you register";
+      if (feeTag) feeTag.textContent = "💳 Razorpay";
+      document.getElementById("formPaymentSection").classList.add("hidden");
+    } else {
+      payBtn.classList.remove("hidden");
+      document.getElementById("payNote").textContent = "Demo mode: tap Pay to simulate confirmation.";
+      if (feeTag) feeTag.textContent = "⚡ Instant confirmation";
+      document.getElementById("formPaymentSection").classList.add("hidden");
+    }
+    if (currentRecord) updatePayUi(currentRecord);
+  }
+
+  function paymentQrCategoryName() {
+    return selectedCategoryName();
+  }
+
+  function defaultPaymentQrStored() {
+    var payment = (paymentCfg && paymentCfg.payment) || tournament.payment || {};
+    return !!(payment.qrImageUrl || (paymentCfg && paymentCfg.qrImageUrl) || tournament.payment && tournament.payment.qrImageUrl);
+  }
+
+  function anyCategoryPaymentQr() {
+    return C.normalizeCategories(tournament.categories).some(function (c) {
+      return !!(c.qrImageUrl && String(c.qrImageUrl).trim());
+    });
+  }
+
+  function canShowPaymentQr(categoryName) {
+    if (C.resolvePaymentQrImageUrl(tournament, categoryName)) return true;
+    if (defaultPaymentQrStored()) return true;
+    if (categoryName) {
+      var key = String(categoryName).trim().toLowerCase();
+      var match = C.normalizeCategories(tournament.categories).find(function (c) {
+        return String(c.name || "").trim().toLowerCase() === key;
+      });
+      return !!(match && match.qrImageUrl);
+    }
+    return anyCategoryPaymentQr();
+  }
+
+  function fillPaymentQrWrap(qrWrap, categoryName) {
+    if (!qrWrap || !paymentCfg || paymentCfg.mode !== "manual_qr") return;
+    var payment = paymentCfg.payment || {};
+    qrWrap.innerHTML = "";
+
+    function appendStaticQr() {
+      var img = document.createElement("img");
+      img.alt = "Payment QR";
+      img.style.cssText = "max-width:280px;border-radius:12px;width:100%";
+      img.src = C.paymentQrImageSrc(tournament, categoryName);
+      img.onerror = function () {
+        img.remove();
+        if (!qrWrap.querySelector(".qr-load-fail")) {
+          var fail = document.createElement("p");
+          fail.className = "muted qr-load-fail";
+          fail.style.fontSize = ".88rem";
+          fail.style.margin = "0";
+          fail.textContent = categoryName
+            ? "Could not load the QR for this category. Contact the organizer or try another category."
+            : "Select your category to show the payment QR, or ask the organizer to upload a default QR.";
+          qrWrap.appendChild(fail);
+        }
+      };
+      qrWrap.appendChild(img);
+    }
+
+    if (payment.qrSource === "upi" && payment.upiId) {
+      C.api.paymentQrPreview(tournament, categoryName).then(function (data) {
+        if (data.qrDataUrl) {
+          qrWrap.innerHTML = '<img alt="UPI QR" src="' + data.qrDataUrl + '" style="max-width:280px;border-radius:12px;width:100%">';
+        } else {
+          appendStaticQr();
+        }
+      }).catch(function () {
+        appendStaticQr();
+      });
+      return;
+    }
+
+    if (!canShowPaymentQr(categoryName)) {
+      qrWrap.innerHTML = '<p class="muted" style="margin:0;font-size:.88rem">Select your category to show the payment QR.</p>';
+      return;
+    }
+    if (!categoryName && anyCategoryPaymentQr() && !defaultPaymentQrStored()) {
+      qrWrap.innerHTML = '<p class="muted" style="margin:0 0 10px;font-size:.88rem">Select your category to show the correct payment QR.</p>';
+    }
+    appendStaticQr();
+  }
+
+  function refreshFormPaymentQr() {
+    fillPaymentQrWrap(document.getElementById("formQrWrap"), paymentQrCategoryName());
+    updateFeeDisplay();
+  }
+
+  function setupFormPaymentUi() {
+    var sec = document.getElementById("formPaymentSection");
+    if (!paymentCfg || paymentCfg.mode !== "manual_qr") {
+      sec.classList.add("hidden");
+      return;
+    }
+    sec.classList.remove("hidden");
+    document.getElementById("feeStripLabel").textContent = "Entry fee — scan QR, pay, attach receipt";
+    var payment = paymentCfg.payment || {};
+    document.getElementById("formPaymentInstructions").textContent =
+      payment.paymentInstructions || paymentCfg.paymentInstructions || "Pay the entry fee using the QR code, then upload your payment receipt below.";
+    refreshFormPaymentQr();
+    var imgField = payment.receiptImage !== "hidden";
+    var upiField = payment.receiptUpiRef !== "hidden";
+    var imgLabel = document.getElementById("formReceiptImageLabel");
+    var upiLabel = document.getElementById("formReceiptUpiLabel");
+    imgLabel.classList.toggle("hidden", !imgField);
+    upiLabel.classList.toggle("hidden", !upiField);
+    if (imgField) {
+      document.getElementById("formReceiptImageLabelText").textContent = payment.receiptImage === "required"
+        ? "Payment receipt screenshot *"
+        : "Payment receipt screenshot (optional)";
+    }
+    if (upiField) {
+      document.getElementById("formReceiptUpiLabelText").textContent = payment.receiptUpiRef === "required"
+        ? "UPI transaction ID *"
+        : "UPI transaction ID (optional)";
+    }
+  }
+
+  if (paymentCfg) {
+    applyPaymentUi(paymentCfg);
+  } else {
+    paymentCfg = {
+      mode: (tournament.payment && tournament.payment.mode === "manual_qr") ? "manual_qr" : "razorpay",
+      payment: tournament.payment || {},
+      razorpayAvailable: true
+    };
+    applyPaymentUi(paymentCfg);
+    C.api.tournamentPaymentConfig(tournament).then(function (cfg) {
+      paymentCfg = cfg;
+      applyPaymentUi(cfg);
+    }).catch(function () {
+      document.getElementById("payNote").textContent = "Could not load payment settings. Refresh the page or contact the organizer.";
+    });
+  }
+  if (tournament.showPublicRoster === false) {
+    document.getElementById("rosterOpenBtn").classList.add("hidden");
+  }
+  var ledgerUrl = C.tournamentLedgerUrl(tournament);
+  if (ledgerUrl) document.getElementById("ledgerLink").href = ledgerUrl;
+  var statsUrl = C.tournamentStatsUrl(tournament);
+  var statsLink = document.getElementById("statsLink");
+  var playersSearchLink = document.getElementById("playersSearchLink");
+  var lb = C.normalizeLeaderboardStats(tournament.leaderboardStats);
+  var statsExtra = {};
+  var keys = C.tournamentKeys(tournament);
+  if (keys.tournament && keys.season) {
+    statsExtra.tournament = keys.tournament;
+    statsExtra.season = keys.season;
+  } else if (keys.slug) {
+    statsExtra.t = keys.slug;
+  }
+  if (statsUrl) {
+    statsLink.href = statsUrl;
+    statsLink.classList.remove("hidden");
+    if (playersSearchLink && lb.enabled) {
+      playersSearchLink.href = C.playersSearchUrl(lb.gender, lb.edition, statsExtra);
+      playersSearchLink.classList.remove("hidden");
+    } else if (playersSearchLink) {
+      playersSearchLink.classList.add("hidden");
+    }
+  } else {
+    statsLink.classList.add("hidden");
+    if (playersSearchLink) playersSearchLink.classList.add("hidden");
+  }
+
+  var deskNumber = tournament.supportWhatsapp || "";
+  if (deskNumber) {
+    document.getElementById("infoWa").classList.remove("hidden");
+    document.getElementById("infoWaLink").href = C.waMeUrl(deskNumber, "Hi, I have a question about " + tournament.name + ".");
+  }
+
+  document.getElementById("badges").innerHTML = [
+    '<span class="badge">' + (state === "OPEN" ? "🟢 " : state === "CLOSED" ? "🔴 " : "🟡 ") + C.escapeHtml(C.stateLabel(state)) + "</span>",
+    '<span class="badge">📅 ' + C.escapeHtml(C.formatDateRange(tournament)) + "</span>",
+    '<span id="heroFeeBadges"></span>'
+  ].join("");
+  renderHeroFeeBadges(selectedCategoryName());
+
+  var skills = tournament.skills && tournament.skills.length ? tournament.skills : C.defaultTournament().skills;
+  document.getElementById("skills").innerHTML = skills.map(function (skill) {
+    var value = skill.value || skill.label;
+    var label = skill.label || skill.value;
+    var emoji = skill.emoji || C.skillEmoji(value);
+    return '<label class="skill"><input name="skill" value="' + C.escapeHtml(value) + '" type="radio" required><span>' + C.escapeHtml(emoji + " " + label) + "</span></label>";
+  }).join("");
+
+  function fm(key) {
+    return C.fieldModeForTournament(tournament, key);
+  }
+  function fieldSuffix(key) {
+    var mode = fm(key);
+    if (mode === "required") return " *";
+    if (mode === "optional") return ' <span class="opt">(optional)</span>';
+    return "";
+  }
+  var categories = C.normalizeCategories(tournament.categories);
+  var categoryOptionsHtml = '<option value="">Select category</option>' + categories.map(function (item) {
+    var feeLabel = " — " + C.formatMoney(tournament, item.name);
+    return '<option value="' + C.escapeHtml(item.name) + '">' + C.escapeHtml(item.name + feeLabel) + "</option>";
+  }).join("");
+
+  function fieldSuffixFromMode(mode) {
+    if (mode === "required") return " *";
+    if (mode === "optional") return ' <span class="opt">(optional)</span>';
+    return "";
+  }
+
+  function buildSimpleField(text, mode, inputHtml) {
+    var reqAttr = mode === "required" ? " required" : "";
+    return "<label>" + text + fieldSuffixFromMode(mode) + inputHtml.replace(/^(<\w+)/, "$1" + reqAttr) + "</label>";
+  }
+
+  function htmlCustomField(field) {
+    var suffix = fieldSuffixFromMode(field.mode);
+    var reqAttr = field.mode === "required" ? " required" : "";
+    var key = C.escapeHtml(field.id);
+    if (field.type === "select") {
+      var opts = '<option value="">Select</option>' + (field.options || []).map(function (opt) {
+        return "<option>" + C.escapeHtml(opt) + "</option>";
+      }).join("");
+      return "<label>" + C.escapeHtml(field.label) + suffix +
+        '<select data-custom-field="' + key + '"' + reqAttr + ">" + opts + "</select></label>";
+    }
+    var inputType = field.type === "number" ? "number" : field.type === "date" ? "date" : field.type === "url" ? "url" : "text";
+    var extra = field.type === "url" ? ' placeholder="https://"' : "";
+    return "<label>" + C.escapeHtml(field.label) + suffix +
+      '<input data-custom-field="' + key + '" type="' + inputType + '"' + reqAttr + extra + "></label>";
+  }
+
+  function htmlBuiltinField(field) {
+    var mode = field.mode;
+    var reqAttr = mode === "required" ? " required" : "";
+    var labels = C.BUILTIN_FIELD_LABELS;
+    if (field.id === "flatNumber") {
+      return '<label><span>Flat number' + fieldSuffixFromMode(mode) + '</span><input id="flat" maxlength="30" placeholder="e.g. A-1203"' + reqAttr + "></label>";
+    }
+    if (field.id === "category") {
+      return '<label><span>Category' + fieldSuffixFromMode(mode) + '</span><select id="category"' + reqAttr + ">" + categoryOptionsHtml + "</select></label>";
+    }
+    if (field.id === "photo") {
+      return '<div class="profile-field"><p class="form-section-title" style="margin:0 0 8px">Profile picture' + fieldSuffixFromMode(mode) + '</p><div class="profile-upload">' +
+        '<button type="button" class="profile-preview" id="profilePreviewBtn" aria-label="Add profile picture" aria-expanded="false" aria-controls="profilePhotoMenu">📷</button>' +
+        '<div class="profile-upload-actions">' +
+        '<div class="profile-photo-menu hidden" id="profilePhotoMenu" role="menu">' +
+        '<button type="button" class="pick-photo" role="menuitem" id="photoUploadBtn">Upload photo</button>' +
+        '<button type="button" class="pick-photo secondary" role="menuitem" id="photoCameraBtn">Take picture</button>' +
+        "</div>" +
+        '<input id="photo" type="file" accept="image/jpeg,image/png,image/webp,image/*">' +
+        '<input id="photoCamera" type="file" accept="image/*" capture="user">' +
+        '<p class="profile-hint">Tap the circle, then upload from your device or take a photo with your camera.</p></div></div></div>';
+    }
+    if (field.id === "dob") {
+      return buildSimpleField("Date of birth", mode, '<input id="dob" type="date">');
+    }
+    if (field.id === "jerseyNumber") {
+      return buildSimpleField("Suggested jersey no.", mode, '<input id="jersey" type="number" min="0" max="999" placeholder="e.g. 18">');
+    }
+    if (field.id === "jerseySize") {
+      var chartSrc = tournament.jerseySizeChartUrl ? C.api.jerseySizeChartImageUrl(tournament) : "";
+      var sizeInner = '<select id="size"' + reqAttr + '><option value="">Select size</option>' +
+        (tournament.jerseySizes || []).map(function (size) {
+          return "<option>" + C.escapeHtml(size) + "</option>";
+        }).join("") + "</select>";
+      if (chartSrc) {
+        sizeInner += '<div class="jersey-size-sample"><p class="profile-hint" style="margin:0 0 8px">Sample T-shirt sizes</p>' +
+          '<a href="' + C.escapeHtml(chartSrc) + '" target="_blank" rel="noopener" title="Open full size">' +
+          '<img src="' + C.escapeHtml(chartSrc) + '" alt="Sample T-shirt size guide"></a></div>';
+      }
+      return "<label>T-shirt size" + fieldSuffixFromMode(mode) + sizeInner + "</label>";
+    }
+    if (field.id === "sleeve") {
+      return buildSimpleField("Sleeve", mode, '<select id="sleeve"><option value="">Select</option>' +
+        (tournament.sleeves || []).map(function (sleeve) {
+          return "<option>" + C.escapeHtml(sleeve) + "</option>";
+        }).join("") + "</select>");
+    }
+    if (field.id === "cricheroes") {
+      return buildSimpleField("CricHeroes", mode, '<input id="cricheroes" type="url" placeholder="https://crickeroes.com/...">');
+    }
+    if (field.id === "instagram") {
+      return buildSimpleField("Instagram", mode, '<input id="instagram" type="url" placeholder="https://instagram.com/...">');
+    }
+    return "";
+  }
+
+  function collectCustomFieldValues() {
+    var out = {};
+    document.querySelectorAll("[data-custom-field]").forEach(function (el) {
+      var key = el.getAttribute("data-custom-field");
+      if (!key) return;
+      out[key] = el.value.trim();
+    });
+    return out;
+  }
+
+  function applyProfilePhotoPreview(file) {
+    photoFile = file || null;
+    var profilePreviewBtn = document.getElementById("profilePreviewBtn");
+    var menu = document.getElementById("profilePhotoMenu");
+    if (!photoFile || !profilePreviewBtn) return;
+    profilePreviewBtn.innerHTML = "";
+    var img = document.createElement("img");
+    img.alt = "Profile preview";
+    img.src = URL.createObjectURL(photoFile);
+    profilePreviewBtn.appendChild(img);
+    profilePreviewBtn.setAttribute("aria-label", "Change profile picture");
+    if (menu) {
+      menu.classList.add("hidden");
+      profilePreviewBtn.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function bindPhotoInput() {
+    var photo = document.getElementById("photo");
+    var photoCamera = document.getElementById("photoCamera");
+    var profilePreviewBtn = document.getElementById("profilePreviewBtn");
+    if (!photo || photo.dataset.bound === "1") return;
+    photo.dataset.bound = "1";
+
+    function setPhotoMenuOpen(open) {
+      var menu = document.getElementById("profilePhotoMenu");
+      if (!menu || !profilePreviewBtn) return;
+      menu.classList.toggle("hidden", !open);
+      profilePreviewBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function onPhotoFilePicked(event) {
+      var file = event.target.files[0] || null;
+      event.target.value = "";
+      if (file) applyProfilePhotoPreview(file);
+    }
+
+    photo.addEventListener("change", onPhotoFilePicked);
+    if (photoCamera) photoCamera.addEventListener("change", onPhotoFilePicked);
+
+    var uploadBtn = document.getElementById("photoUploadBtn");
+    var cameraBtn = document.getElementById("photoCameraBtn");
+    if (uploadBtn) {
+      uploadBtn.addEventListener("click", function (event) {
+        event.stopPropagation();
+        photo.click();
+      });
+    }
+    if (cameraBtn && photoCamera) {
+      cameraBtn.addEventListener("click", function (event) {
+        event.stopPropagation();
+        photoCamera.click();
+      });
+    }
+    if (profilePreviewBtn) {
+      profilePreviewBtn.addEventListener("click", function (event) {
+        event.stopPropagation();
+        var menu = document.getElementById("profilePhotoMenu");
+        if (menu) setPhotoMenuOpen(menu.classList.contains("hidden"));
+      });
+    }
+    document.addEventListener("click", function (event) {
+      var menu = document.getElementById("profilePhotoMenu");
+      if (!menu || menu.classList.contains("hidden")) return;
+      if (menu.contains(event.target) || (profilePreviewBtn && profilePreviewBtn.contains(event.target))) return;
+      setPhotoMenuOpen(false);
+    });
+  }
+
+  function renderOrderedFormFields() {
+    var fields = C.normalizeFormFields(tournament.formFields, tournament.fields);
+    var parts = [];
+    fields.forEach(function (field) {
+      if (field.source === "custom") parts.push(htmlCustomField(field));
+      else {
+        var html = htmlBuiltinField(field);
+        if (html) parts.push(html);
+      }
+    });
+    document.getElementById("orderedFormFields").innerHTML = parts.join("");
+    bindPhotoInput();
+    bindCategoryQrRefresh();
+  }
+
+  function bindCategoryQrRefresh() {
+    var cat = document.getElementById("category");
+    if (!cat || cat.dataset.qrBound === "1") return;
+    cat.dataset.qrBound = "1";
+    cat.addEventListener("change", function () {
+      refreshFormPaymentQr();
+      checkDuplicate();
+      updateFeeDisplay();
+    });
+  }
+  renderOrderedFormFields();
+
+  function sponsorSlideHtml(item) {
+    var logo = item.logoUrl ? '<img alt="" src="' + C.escapeHtml(item.logoUrl) + '">' : "<span>" + C.escapeHtml(item.name) + "</span>";
+    if (item.websiteUrl) {
+      return '<a class="sponsor-carousel-item" href="' + C.escapeHtml(item.websiteUrl) + '" target="_blank" rel="noopener">' + logo + "</a>";
+    }
+    return '<div class="sponsor-carousel-item">' + logo + "</div>";
+  }
+
+  var sponsors = (tournament.sponsors || []).filter(function (item) { return item && (item.name || item.logoUrl); });
+  var sponsorFooter = document.getElementById("sponsorFooter");
+  var sponsorTrack = document.getElementById("sponsorCarouselTrack");
+  if (!sponsors.length) {
+    sponsorFooter.classList.add("hidden");
+  } else {
+    sponsorFooter.classList.remove("hidden");
+    var slides = sponsors.map(sponsorSlideHtml).join("");
+    sponsorTrack.innerHTML = slides + slides;
+  }
+
+  function fillOtherTournaments(list) {
+    var others = (list || []).filter(function (item) {
+      return !C.sameSeason(item, tournament) && (C.publicState(item) === "OPEN" || preview);
+    });
+    document.getElementById("otherTournaments").innerHTML = others.map(function (item) {
+      return ' <a href="' + C.escapeHtml(C.publicUrl(item, { preview: preview })) + '">' + C.escapeHtml(item.shortName || item.name) + "</a>";
+    }).join("");
+  }
+  if (all.length) fillOtherTournaments(all);
+  else C.api.listPublic(preview).then(fillOtherTournaments).catch(function () {});
+
+  function val(id) {
+    var el = document.getElementById(id);
+    return el ? el.value.trim() : "";
+  }
+
+  function fillForm(data) {
+    if (!data) return;
+    ["name", "phone", "flat", "category", "dob", "jersey", "size", "sleeve", "cricheroes", "instagram"].forEach(function (id) {
+      if (data[id] != null && document.getElementById(id)) document.getElementById(id).value = data[id];
+    });
+    if (data.customFields) {
+      Object.keys(data.customFields).forEach(function (key) {
+        var el = document.querySelector('[data-custom-field="' + key + '"]');
+        if (el) el.value = data.customFields[key];
+      });
+    }
+    if (data.skill) {
+      var radio = document.querySelector('input[name="skill"][value="' + data.skill + '"]');
+      if (radio) radio.checked = true;
+    }
+  }
+
+  fillForm(C.getDraft(tournament));
+  updateFeeDisplay();
+
+  function persistDraft() {
+    C.saveDraft(tournament, {
+      name: val("name"),
+      phone: val("phone"),
+      flat: val("flat"),
+      category: val("category"),
+      dob: val("dob"),
+      jersey: val("jersey"),
+      size: val("size"),
+      sleeve: val("sleeve"),
+      cricheroes: val("cricheroes"),
+      instagram: val("instagram"),
+      skill: document.querySelector('input[name="skill"]:checked')?.value || "",
+      customFields: collectCustomFieldValues()
+    });
+  }
+
+  document.getElementById("regForm").addEventListener("input", persistDraft);
+
+  function applySuccessMessage(record, isReturning) {
+    var paid = record.paymentStatus === "PAID";
+    var pill = document.getElementById("payPill");
+    var manual = paymentCfg && paymentCfg.mode === "manual_qr";
+    if (paid) {
+      suppressPayPanels = false;
+      document.getElementById("successTitle").textContent = "You're confirmed.";
+      document.getElementById("successText").textContent = isReturning
+        ? "This WhatsApp number is already confirmed for this tournament."
+        : "You're all set for this tournament.";
+      pill.parentElement.classList.remove("hidden");
+      return;
+    }
+    suppressPayPanels = !isReturning;
+    document.getElementById("successTitle").textContent = isReturning ? "Welcome back" : "Registration complete";
+    if (manual && !isReturning && skipSuccessPaymentQr) {
+      if (record.verificationStatus === "SUBMITTED") {
+        document.getElementById("successText").textContent =
+          "You’re registered. Your payment receipt is with the organizer for verification.";
+      } else if (record.verificationStatus === "REJECTED") {
+        document.getElementById("successText").textContent =
+          "Your receipt was declined. Upload a new receipt below to continue.";
+      } else {
+        document.getElementById("successText").textContent =
+          "You’re registered. Upload your payment receipt below if you have not already.";
+      }
+    } else {
+      document.getElementById("successText").textContent = manual
+        ? "Your spot will be confirmed once the admin verifies your payment."
+        : "Your spot will be confirmed once payment is complete.";
+    }
+    pill.parentElement.classList.add("hidden");
+    if (suppressPayPanels) {
+      document.getElementById("formPaymentSection").classList.add("hidden");
+      document.getElementById("waShare").classList.add("hidden");
+      document.getElementById("successPhoto").classList.add("hidden");
+      document.getElementById("payNote").classList.add("hidden");
+      document.getElementById("payBtn").classList.add("hidden");
+      document.getElementById("waDesk").classList.add("hidden");
+    } else {
+      document.getElementById("waShare").classList.remove("hidden");
+      document.getElementById("payNote").classList.remove("hidden");
+    }
+  }
+
+  function showExisting(record, isReturning) {
+    if (isReturning) skipSuccessPaymentQr = false;
+    currentRecord = record;
+    document.getElementById("formCard").classList.add("hidden");
+    document.getElementById("gateCard").classList.add("hidden");
+    document.getElementById("success").style.display = "block";
+    applySuccessMessage(record, isReturning !== false);
+    updatePayUi(record);
+    if (suppressPayPanels) {
+      document.getElementById("waShare").classList.add("hidden");
+      document.getElementById("successPhoto").classList.add("hidden");
+      document.getElementById("payNote").classList.add("hidden");
+      document.getElementById("payBtn").classList.add("hidden");
+      document.getElementById("waDesk").classList.add("hidden");
+    }
+    updateWaLinks(record);
+  }
+
+  function updateCategoryGroupLink(record) {
+    var btn = document.getElementById("waCategoryGroup");
+    var hint = document.getElementById("categoryGroupHint");
+    if (!btn) return;
+    var url = C.groupLinkForCategory(tournament.categories, record && record.category);
+    var valid = url && /^https?:\/\//i.test(url);
+    if (valid) {
+      var cat = (record && record.category) ? record.category : "your category";
+      btn.href = url;
+      btn.textContent = "Join " + cat + " WhatsApp group";
+      btn.classList.remove("hidden");
+      if (hint) {
+        hint.textContent = "Tap below to join the WhatsApp group for " + cat + ".";
+        hint.classList.remove("hidden");
+      }
+    } else {
+      btn.classList.add("hidden");
+      btn.removeAttribute("href");
+      if (hint) hint.classList.add("hidden");
+    }
+  }
+
+  function updateWaLinks(record) {
+    updateCategoryGroupLink(record);
+    var text = C.registrationWaText(tournament, record);
+    document.getElementById("waShare").href = C.waMeUrl("", text);
+    var desk = document.getElementById("waDesk");
+    if (deskNumber && !suppressPayPanels) {
+      desk.href = C.waMeUrl(deskNumber, text);
+      desk.classList.remove("hidden");
+    } else {
+      desk.classList.add("hidden");
+    }
+  }
+
+  function loadManualPayUi(record) {
+    var box = document.getElementById("manualPayBox");
+    var qrWrap = document.getElementById("qrWrap");
+    var titleEl = box.querySelector("h3");
+    if (!paymentCfg || paymentCfg.mode !== "manual_qr" || record.paymentStatus === "PAID") {
+      box.classList.add("hidden");
+      return;
+    }
+    if (suppressPayPanels && !skipSuccessPaymentQr) {
+      box.classList.add("hidden");
+      return;
+    }
+    var payment = paymentCfg.payment || {};
+    var imgField = payment.receiptImage !== "hidden";
+    var upiField = payment.receiptUpiRef !== "hidden";
+    var alreadySubmitted = record.verificationStatus === "SUBMITTED";
+    var showReceiptFields = (imgField || upiField) && !alreadySubmitted;
+    var hideQr = skipSuccessPaymentQr;
+
+    if (hideQr && !showReceiptFields && record.verificationStatus !== "REJECTED") {
+      box.classList.add("hidden");
+      return;
+    }
+
+    box.classList.remove("hidden");
+    if (hideQr) {
+      qrWrap.innerHTML = "";
+      qrWrap.classList.add("hidden");
+      if (!showReceiptFields && record.verificationStatus !== "REJECTED") {
+        box.classList.add("hidden");
+        return;
+      }
+      if (titleEl) titleEl.textContent = "Payment receipt";
+      document.getElementById("manualPayInstructions").textContent = showReceiptFields
+        ? "Upload your payment receipt below to finish verification."
+        : "Receipt submitted — waiting for organizer approval.";
+    } else {
+      qrWrap.classList.remove("hidden");
+      if (titleEl) titleEl.textContent = "Pay entry fee";
+      document.getElementById("manualPayInstructions").textContent =
+        payment.paymentInstructions || paymentCfg.paymentInstructions || "Pay the entry fee, then upload your receipt.";
+      fillPaymentQrWrap(qrWrap, record.category || undefined);
+    }
+    document.getElementById("receiptImageLabel").classList.toggle("hidden", !imgField || !showReceiptFields);
+    document.getElementById("receiptUpiLabel").classList.toggle("hidden", !upiField || !showReceiptFields);
+    document.getElementById("submitReceiptBtn").classList.toggle("hidden", !showReceiptFields);
+    var status = document.getElementById("receiptStatus");
+    if (record.verificationStatus === "SUBMITTED") {
+      status.textContent = "Receipt submitted — waiting for organizer approval.";
+    } else if (record.verificationStatus === "REJECTED") {
+      status.textContent = "Receipt declined: " + (record.rejectReason || "Please submit again.");
+    } else {
+      status.textContent = "";
+    }
+  }
+
+  function updatePayUi(record) {
+    var paid = record.paymentStatus === "PAID";
+    var pill = document.getElementById("payPill");
+    if (paid) {
+      pill.textContent = "Confirmed";
+    } else if (record.verificationStatus === "SUBMITTED") {
+      pill.textContent = "Receipt under review";
+    } else if (record.verificationStatus === "REJECTED") {
+      pill.textContent = "Receipt declined — resubmit";
+    } else {
+      pill.textContent = "Reserved — pay to confirm";
+    }
+    pill.className = "status-pill " + (paid ? "status-paid" : "status-pending");
+    var hidePay = paid || (paymentCfg && paymentCfg.mode === "manual_qr");
+    document.getElementById("payBtn").classList.toggle("hidden", hidePay || suppressPayPanels);
+    document.getElementById("successPhoto").classList.toggle("hidden", paid || fm("photo") === "off" || suppressPayPanels);
+    document.getElementById("waShare").classList.toggle("hidden", suppressPayPanels);
+    document.getElementById("payNote").classList.toggle("hidden", suppressPayPanels);
+    loadManualPayUi(record);
+    updateWaLinks(record);
+  }
+
+  var lookupTimer = null;
+  var lastExisting = null;
+  var lastLookupPhone = "";
+  var lastLookupCategory = "";
+  var lastLookupClear = false;
+  function checkDuplicate() {
+    var phone = val("phone");
+    var hint = document.getElementById("dupHint");
+    lastExisting = null;
+    lastLookupPhone = "";
+    lastLookupCategory = "";
+    lastLookupClear = false;
+    if (phone.length !== 10) {
+      hint.classList.add("hidden");
+      return Promise.resolve(null);
+    }
+    var category = val("category");
+    return C.api.lookup(tournament, phone, category).then(function (existing) {
+      lastLookupPhone = phone;
+      lastLookupCategory = category;
+      lastLookupClear = !existing;
+      lastExisting = existing;
+      if (!existing) {
+        hint.classList.add("hidden");
+        return null;
+      }
+      hint.classList.remove("hidden");
+      var catNote = category ? " in " + category : "";
+      hint.innerHTML = "This WhatsApp number is already registered" + catNote + ". <button type='button' class='link' id='openExisting'>View registration</button>";
+      document.getElementById("openExisting").onclick = function () { showExisting(existing, true); };
+      return existing;
+    }).catch(function () { return null; });
+  }
+
+  document.getElementById("phone").addEventListener("input", function () {
+    this.value = this.value.replace(/\D/g, "").slice(0, 10);
+    clearTimeout(lookupTimer);
+    lookupTimer = setTimeout(checkDuplicate, 250);
+  });
+
+  if (!C.canRegister(tournament, preview)) {
+    document.getElementById("formCard").classList.add("hidden");
+    document.getElementById("gateCard").classList.remove("hidden");
+    document.getElementById("gateTitle").textContent = C.stateLabel(state);
+    document.getElementById("gateEmoji").textContent = state === "CLOSED" ? "🔒" : "⏳";
+    document.getElementById("gateText").textContent = state === "CLOSED"
+      ? "Registration for this tournament is closed."
+      : "Registration opens " + C.formatPrettyDate(tournament.registrationStart) + ".";
+  } else {
+    document.getElementById("formCard").classList.remove("hidden");
+  }
+
+  function sendPhoto(record, file, attempt) {
+    if (!record || !file) return Promise.resolve(record);
+    var tries = attempt || 0;
+    return C.api.uploadPhoto(tournament, record.id, file).then(function (data) {
+      return data.record || record;
+    }).catch(function (err) {
+      if (tries < 2) {
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 400 * (tries + 1));
+        }).then(function () {
+          return sendPhoto(record, file, tries + 1);
+        });
+      }
+      return Promise.reject(err);
+    });
+  }
+
+  function showFormError(message) {
+    var hint = document.getElementById("dupHint");
+    hint.classList.remove("hidden");
+    hint.textContent = message;
+    hint.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  document.getElementById("regForm").addEventListener("submit", async function (event) {
+    event.preventDefault();
+    document.getElementById("dupHint").classList.add("hidden");
+    var phone = val("phone");
+    var category = val("category");
+    var skill = document.querySelector('input[name="skill"]:checked')?.value;
+    var receiptFile = document.getElementById("formReceiptFile").files[0];
+    var receiptUpi = document.getElementById("formReceiptUpi").value.trim();
+    if (fm("photo") === "required" && !photoFile) {
+      showFormError("Please add a profile photo.");
+      return;
+    }
+    if (fm("category") === "required" && !category) {
+      showFormError("Please select a category.");
+      return;
+    }
+    var existing = await checkDuplicate();
+    if (existing) {
+      var catNote = category ? " in " + category : "";
+      showFormError("This WhatsApp number is already registered" + catNote + ". Use “View registration” above the number field if you need your confirmation.");
+      return;
+    }
+    if (paymentCfg && paymentCfg.mode === "manual_qr") {
+      var pay = paymentCfg.payment || {};
+      if (pay.receiptImage === "required" && !receiptFile) {
+        showFormError("Please upload your payment receipt screenshot.");
+        return;
+      }
+      if (pay.receiptUpiRef === "required" && !receiptUpi) {
+        showFormError("Please enter your UPI transaction ID.");
+        return;
+      }
+    }
+    var submitBtn = document.getElementById("submitBtn");
+    var submitLabel = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Registering…";
+    try {
+      var uploadBundle = {};
+      if (photoFile) uploadBundle.photo = photoFile;
+      if (receiptFile) uploadBundle.receipt = receiptFile;
+      if (receiptUpi) uploadBundle.receiptUpi = receiptUpi;
+      var result = await C.api.register(tournament, {
+        name: val("name"),
+        dob: val("dob"),
+        flat: val("flat"),
+        category: category,
+        phone: phone,
+        skill: skill,
+        jersey: val("jersey"),
+        size: val("size"),
+        sleeve: val("sleeve"),
+        cricheroes: val("cricheroes"),
+        instagram: val("instagram"),
+        customFields: collectCustomFieldValues()
+      }, preview, uploadBundle);
+      C.clearDraft(tournament);
+      document.getElementById("successEmoji").textContent = "✅";
+      var record = result.record;
+      var receiptOnForm = paymentCfg && paymentCfg.mode === "manual_qr" && (receiptFile || receiptUpi);
+      if (receiptOnForm && record.verificationStatus !== "SUBMITTED") {
+        submitBtn.textContent = "Uploading receipt…";
+        try {
+          record = await C.api.uploadReceipt(tournament, record.id, receiptFile, receiptUpi);
+        } catch (receiptErr) {
+          currentRecord = result.record;
+          skipSuccessPaymentQr = true;
+          showExisting(result.record, false);
+          updatePayUi(result.record);
+          document.getElementById("receiptStatus").textContent =
+            receiptErr.message || "Could not upload receipt. Try again below.";
+          document.getElementById("manualPayBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitLabel;
+          return;
+        }
+      }
+      if (photoFile && !record.photoUrl) {
+        submitBtn.textContent = "Saving photo…";
+        try {
+          record = await sendPhoto(record, photoFile);
+        } catch (photoErr) {
+          showFormError(photoErr.message || "Registration saved but photo upload failed. Use “View registration” and add your photo below.");
+          currentRecord = record;
+          skipSuccessPaymentQr = true;
+          showExisting(record, false);
+          updatePayUi(record);
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitLabel;
+          return;
+        }
+      }
+      currentRecord = record;
+      skipSuccessPaymentQr = true;
+      showExisting(record, false);
+      updatePayUi(record);
+    } catch (err) {
+      showFormError(err.message || "Could not save. Try again.");
+      submitBtn.disabled = false;
+      submitBtn.textContent = submitLabel;
+    }
+  });
+
+  document.getElementById("submitReceiptBtn").addEventListener("click", async function () {
+    if (!currentRecord) return;
+    var file = document.getElementById("receiptFile").files[0];
+    var upiRef = document.getElementById("receiptUpi").value.trim();
+    this.disabled = true;
+    try {
+      currentRecord = await C.api.uploadReceipt(tournament, currentRecord.id, file, upiRef);
+      updatePayUi(currentRecord);
+      applySuccessMessage(currentRecord, true);
+      document.getElementById("receiptStatus").textContent = "Receipt submitted — waiting for organizer approval.";
+    } catch (err) {
+      document.getElementById("receiptStatus").textContent = err.message || "Could not submit receipt.";
+    } finally {
+      this.disabled = false;
+    }
+  });
+
+  document.getElementById("payBtn").addEventListener("click", async function () {
+    if (!currentRecord) return;
+    this.disabled = true;
+    try {
+      currentRecord = await C.api.pay(tournament, currentRecord.id);
+      updatePayUi(currentRecord);
+      applySuccessMessage(currentRecord, false);
+    } catch (err) {
+      var msg = err.message || "Payment failed. Try again.";
+      if (msg !== "Payment cancelled") {
+        document.getElementById("payNote").textContent = msg;
+      }
+    } finally {
+      this.disabled = false;
+    }
+  });
+
+  document.getElementById("anotherBtn").addEventListener("click", function () {
+    location.href = C.publicUrl(tournament, { preview: preview });
+  });
+
+  var later = document.getElementById("photoLater");
+  var laterCamera = document.getElementById("photoLaterCamera");
+  var laterPreview = document.getElementById("previewLater");
+
+  async function applyPhotoLater(file) {
+    if (!file || !currentRecord) return;
+    laterPreview.src = URL.createObjectURL(file);
+    laterPreview.style.display = "block";
+    currentRecord = await sendPhoto(currentRecord, file);
+  }
+
+  function bindLaterPhotoInput(input) {
+    if (!input) return;
+    input.addEventListener("change", function (event) {
+      var file = event.target.files[0];
+      event.target.value = "";
+      applyPhotoLater(file);
+    });
+  }
+  bindLaterPhotoInput(later);
+  bindLaterPhotoInput(laterCamera);
+  var laterUploadBtn = document.getElementById("photoLaterUploadBtn");
+  var laterCameraBtn = document.getElementById("photoLaterCameraBtn");
+  if (laterUploadBtn && later) laterUploadBtn.addEventListener("click", function () { later.click(); });
+  if (laterCameraBtn && laterCamera) laterCameraBtn.addEventListener("click", function () { laterCamera.click(); });
+
+  if (location.hash === "#existing" && val("phone").length === 10) checkDuplicate();
+
+  var rosterData = null;
+  var rosterActiveTab = "";
+
+  function rosterStatusClass(status) {
+    if (status === "Confirmed") return "roster-status-confirmed";
+    if (status === "Pending verification" || status === "Payment declined") return "roster-status-pending";
+    return "roster-status-reserved";
+  }
+
+  function playerInitials(name) {
+    var parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+  }
+
+  function rosterPhotoCell(player) {
+    if (player.photoUrl && player.photoRef) {
+      var src = C.api.playerPhotoImageUrl(tournament, player.photoRef);
+      return '<img class="roster-photo" alt="" src="' + C.escapeHtml(src) + '">';
+    }
+    if (player.photoUrl) {
+      var direct = C.resolvePhotoUrl(player.photoUrl);
+      if (direct) {
+        return '<img class="roster-photo" alt="" src="' + C.escapeHtml(direct) + '">';
+      }
+    }
+    return '<div class="roster-photo-placeholder" aria-hidden="true">' + C.escapeHtml(playerInitials(player.name)) + "</div>";
+  }
+
+  function rosterTabNames() {
+    var configured = C.normalizeCategories(tournament.categories).map(function (c) { return c.name; });
+    var fromPlayers = {};
+    (rosterData.players || []).forEach(function (p) {
+      var cat = p.category || "Other";
+      fromPlayers[cat] = true;
+    });
+    var tabs = configured.slice();
+    Object.keys(fromPlayers).forEach(function (cat) {
+      if (tabs.indexOf(cat) === -1) tabs.push(cat);
+    });
+    if (!tabs.length) tabs = Object.keys(fromPlayers);
+    return tabs;
+  }
+
+  function playersForTab(tab) {
+    return (rosterData.players || []).filter(function (p) {
+      var cat = p.category || "Other";
+      return cat === tab;
+    });
+  }
+
+  function renderRosterTable(players) {
+    if (!players.length) {
+      return '<p class="roster-empty">No players in this category yet.</p>';
+    }
+    var rows = players.map(function (player, index) {
+      return "<tr>" +
+        "<td>" + (index + 1) + "</td>" +
+        '<td class="roster-cell-photo">' + rosterPhotoCell(player) + "</td>" +
+        '<td data-label="Name"><strong>' + C.escapeHtml(player.name) + "</strong></td>" +
+        '<td data-label="Registered">' + C.escapeHtml(C.formatDateTime(player.registeredAt)) + "</td>" +
+        '<td data-label="Status"><span class="roster-status ' + rosterStatusClass(player.status) + '">' +
+        C.escapeHtml(player.status) + "</span></td>" +
+        "</tr>";
+    }).join("");
+    return '<table class="roster-table"><thead><tr>' +
+      "<th>#</th><th>Photo</th><th>Name</th><th>Registered</th><th>Status</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table>";
+  }
+
+  function renderRosterTabs() {
+    var tabs = rosterTabNames();
+    if (!tabs.length) {
+      document.getElementById("rosterTabs").innerHTML = "";
+      document.getElementById("rosterBody").innerHTML = '<p class="roster-empty">No registrations yet.</p>';
+      return;
+    }
+    if (!rosterActiveTab || tabs.indexOf(rosterActiveTab) === -1) rosterActiveTab = tabs[0];
+    document.getElementById("rosterTabs").innerHTML = tabs.map(function (tab) {
+      var active = tab === rosterActiveTab ? " active" : "";
+      var count = playersForTab(tab).length;
+      return '<button type="button" class="roster-tab' + active + '" data-tab="' + C.escapeHtml(tab) + '" role="tab">' +
+        C.escapeHtml(tab) + " (" + count + ")</button>";
+    }).join("");
+    document.getElementById("rosterBody").innerHTML = renderRosterTable(playersForTab(rosterActiveTab));
+  }
+
+  function openRosterModal() {
+    document.getElementById("rosterModal").classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+    if (rosterData) {
+      renderRosterTabs();
+      return;
+    }
+    document.getElementById("rosterBody").innerHTML = '<p class="roster-empty">Loading…</p>';
+    C.api.roster(tournament, preview).then(function (data) {
+      rosterData = data;
+      renderRosterTabs();
+    }).catch(function () {
+      document.getElementById("rosterBody").innerHTML = '<p class="roster-empty">Could not load players. Try again later.</p>';
+    });
+  }
+
+  function closeRosterModal() {
+    document.getElementById("rosterModal").classList.add("hidden");
+    document.body.style.overflow = "";
+  }
+
+  document.getElementById("rosterOpenBtn").addEventListener("click", openRosterModal);
+  document.getElementById("rosterCloseBtn").addEventListener("click", closeRosterModal);
+  document.getElementById("rosterBackdrop").addEventListener("click", closeRosterModal);
+  document.getElementById("rosterTabs").addEventListener("click", function (event) {
+    var tab = event.target.getAttribute("data-tab");
+    if (!tab) return;
+    rosterActiveTab = tab;
+    renderRosterTabs();
+  });
+})();
+</script>
+</body>
+</html>

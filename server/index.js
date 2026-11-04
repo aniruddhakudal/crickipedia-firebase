@@ -1,0 +1,2531 @@
+const path = require("path");
+const fs = require("fs");
+const express = require("express");
+const session = require("express-session");
+const multer = require("multer");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
+const db = require("./db");
+const photoStorage = require("./storage");
+const razorpay = require("./razorpay");
+const settingsUtil = require("./settings");
+const notifications = require("./notifications");
+const whatsapp = require("./whatsapp");
+const admins = require("./admins");
+const srplStats = require("./stats/srpl");
+const ledger = require("./ledger");
+
+const PORT = Number(process.env.PORT || 3000);
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const uploadDir = path.join(__dirname, "..", "uploads");
+fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = photoStorage.enabled()
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+    destination: uploadDir,
+    filename(req, file, done) {
+      const ext = path.extname(file.originalname || "").toLowerCase().replace(/[^\w.]/g, "") || ".jpg";
+      done(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+    }
+  });
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, done) {
+    const mime = String(file.mimetype || "").toLowerCase();
+    if (!mime.startsWith("image/")) {
+      done(new Error("File must be an image (JPG, PNG, WebP, etc.)"));
+      return;
+    }
+    done(null, true);
+  }
+});
+
+function withUpload(fieldName) {
+  return function uploadMiddleware(req, res, next) {
+    upload.single(fieldName)(req, res, function (err) {
+      if (err) {
+        const message = err.code === "LIMIT_FILE_SIZE"
+          ? "Image must be 5 MB or smaller"
+          : (err.message || "Upload failed");
+        res.status(400).json({ error: message });
+        return;
+      }
+      next();
+    });
+  };
+}
+
+function withUploadFields(fieldDefs) {
+  return function uploadMiddleware(req, res, next) {
+    upload.fields(fieldDefs)(req, res, function (err) {
+      if (err) {
+        const message = err.code === "LIMIT_FILE_SIZE"
+          ? "Image must be 5 MB or smaller"
+          : (err.message || "Upload failed");
+        res.status(400).json({ error: message });
+        return;
+      }
+      next();
+    });
+  };
+}
+
+function firstUploadedFile(req, fieldName) {
+  const list = req.files && req.files[fieldName];
+  return list && list[0] ? list[0] : null;
+}
+
+async function deleteRegistrationForTournament(tournamentId, registrationNumber) {
+  await db.query(
+    "DELETE FROM registrations WHERE tournament_id = $1 AND registration_number = $2",
+    [tournamentId, registrationNumber]
+  );
+}
+
+async function persistPlayerPhotoForPhone(phone, file) {
+  const playerRow = await db.query("SELECT id FROM players WHERE whatsapp_number = $1", [phone]);
+  if (!playerRow.rows[0]) {
+    throw new Error("Player record missing after registration");
+  }
+  const photoUrl = await photoStorage.savePlayerPhoto(playerRow.rows[0].id, file);
+  await db.query("UPDATE players SET photo_url = $2, updated_at = NOW() WHERE id = $1", [
+    playerRow.rows[0].id,
+    photoUrl
+  ]);
+  return photoUrl;
+}
+
+async function withUploadRetry(fn, attempts) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 350 * (i + 1));
+        });
+      }
+    }
+  }
+  throw lastErr;
+}
+
+const statsCsvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter(req, file, done) {
+    const name = String(file.originalname || "").toLowerCase();
+    const mime = String(file.mimetype || "").toLowerCase();
+    if (mime.includes("csv") || mime === "text/plain" || name.endsWith(".csv")) {
+      done(null, true);
+      return;
+    }
+    done(new Error("File must be a .csv"));
+  }
+});
+
+function withStatsCsvUpload(req, res, next) {
+  statsCsvUpload.single("csv")(req, res, function (err) {
+    if (err) {
+      const message = err.code === "LIMIT_FILE_SIZE"
+        ? "CSV must be 2 MB or smaller"
+        : (err.message || "Upload failed");
+      res.status(400).json({ error: message });
+      return;
+    }
+    next();
+  });
+}
+
+function adminTournamentSlug(req) {
+  return decodeURIComponent(String(req.params.slug || "").trim());
+}
+
+const app = express();
+
+app.get("/api/ping", (req, res) => {
+  res.json({ ok: true, service: "crickipedia", ts: new Date().toISOString() });
+});
+
+app.get("/api/stats/srpl/manifest", (req, res) => {
+  try {
+    const manifest = srplStats.getManifest();
+    srplStats.sendJsonWithCache(res, manifest, hashManifestVersion(manifest));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/league/:leagueId", async (req, res) => {
+  try {
+    const data = await db.listStatsLeagueSeasons(req.params.leagueId);
+    const disk = srplStats.listDiskSeasonsForLeague(req.params.leagueId);
+    const byKey = new Map();
+    (data.seasons || []).forEach((s) => {
+      byKey.set(`${s.gender}:${s.edition}`, s);
+    });
+    disk.forEach((s) => {
+      const key = `${s.gender}:${s.edition}`;
+      if (!byKey.has(key)) byKey.set(key, s);
+    });
+    data.seasons = Array.from(byKey.values()).sort((a, b) => {
+      if (a.gender !== b.gender) return a.gender.localeCompare(b.gender);
+      return srplStats.compareEditionKeys(a.edition, b.edition);
+    });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/merged/players", (req, res) => {
+  try {
+    const editions = String(req.query.editions || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!editions.length) {
+      res.status(400).json({ error: "editions query is required" });
+      return;
+    }
+    const players = srplStats.listPlayersMerged(req.params.gender, editions);
+    srplStats.sendJsonWithCache(
+      res,
+      { players, gender: req.params.gender, editions },
+      `players-merged-${req.params.gender}-${editions.join("+")}-${players.length}`
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/merged/players/:playerId", (req, res) => {
+  try {
+    const editions = String(req.query.editions || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!editions.length) {
+      res.status(400).json({ error: "editions query is required" });
+      return;
+    }
+    const profile = srplStats.getPlayerProfileMerged(
+      req.params.gender,
+      editions,
+      req.params.playerId
+    );
+    if (!profile) {
+      res.status(404).json({ error: "Player not found" });
+      return;
+    }
+    srplStats.sendJsonWithCache(res, profile, profile.v);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/merged/:board", (req, res) => {
+  try {
+    const editions = String(req.query.editions || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!editions.length) {
+      res.status(400).json({ error: "editions query is required" });
+      return;
+    }
+    const bundle = srplStats.readMergedBundle(req.params.gender, editions, req.params.board);
+    if (!bundle) {
+      res.status(404).json({ error: "Stats not found for this selection" });
+      return;
+    }
+    srplStats.sendJsonWithCache(res, bundle, bundle.v);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/:edition/players", (req, res) => {
+  try {
+    const players = srplStats.listPlayers(req.params.gender, req.params.edition);
+    srplStats.sendJsonWithCache(
+      res,
+      { players, gender: req.params.gender, edition: req.params.edition },
+      `players-${req.params.gender}-${req.params.edition}-${players.length}`
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/:edition/players/:playerId", (req, res) => {
+  try {
+    const profile = srplStats.getPlayerProfile(
+      req.params.gender,
+      req.params.edition,
+      req.params.playerId
+    );
+    if (!profile) {
+      res.status(404).json({ error: "Player not found" });
+      return;
+    }
+    srplStats.sendJsonWithCache(res, profile, profile.v);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/stats/srpl/:gender/:edition/:board", (req, res) => {
+  try {
+    if (req.params.board === "players") {
+      res.status(404).json({ error: "Use /players or /players/:playerId" });
+      return;
+    }
+    const preferredStore = req.query && req.query.store;
+    const bundle = srplStats.readBundle(
+      req.params.gender,
+      req.params.edition,
+      req.params.board,
+      preferredStore
+    );
+    if (!bundle) {
+      res.status(404).json({ error: "Stats not found for this selection" });
+      return;
+    }
+    srplStats.sendJsonWithCache(res, bundle, bundle.v);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/stats/srpl/upload", requireSuperadmin, withStatsCsvUpload, (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      res.status(400).json({ error: "No CSV uploaded" });
+      return;
+    }
+    const gender = req.body && req.body.gender;
+    const edition = req.body && req.body.edition;
+    const board = req.body && req.body.board;
+    const tournamentId = req.body && req.body.tournamentId;
+    const dataStore = req.body && req.body.dataStore;
+    const result = srplStats.saveCsvUpload({
+      gender,
+      edition,
+      board,
+      buffer: req.file.buffer,
+      originalName: req.file.originalname,
+      tournamentId,
+      dataStore
+    });
+    res.json({
+      ok: true,
+      fileName: result.fileName,
+      v: result.bundle.v,
+      updatedAt: result.bundle.updatedAt,
+      rowCount: result.bundle.rowCount,
+      manifest: srplStats.getManifest()
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/stats/srpl/rebuild", requireSuperadmin, (req, res) => {
+  try {
+    const rebuilt = srplStats.rebuildAll();
+    res.json({
+      ok: true,
+      count: rebuilt.length,
+      manifest: srplStats.getManifest()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function hashManifestVersion(manifest) {
+  const crypto = require("crypto");
+  const payload = (manifest.datasets || [])
+    .map((d) => `${d.store || "shankeshwaram"}/${d.gender}/${d.edition}/${d.board}:${d.v}`)
+    .join("|");
+  return crypto.createHash("sha256").update(payload).digest("hex").slice(0, 12);
+}
+
+app.get("/api/webhooks/whatsapp", (req, res) => {
+  try {
+    const challenge = whatsapp.verifyWebhookSubscription(req.query);
+    if (challenge != null) {
+      res.status(200).type("text/plain").send(challenge);
+      return;
+    }
+    if (!whatsapp.webhookConfigured()) {
+      res.status(503).type("text/plain").send(
+        "WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set on this server. "
+        + "Add it in your host Environment (e.g. Render → Environment), redeploy, "
+        + "then use the same value in Meta Verify token."
+      );
+      return;
+    }
+    res.status(403).type("text/plain").send("Forbidden");
+  } catch (err) {
+    res.status(500).type("text/plain").send("Webhook error");
+  }
+});
+
+app.post("/api/webhooks/razorpay", express.raw({ type: "application/json" }), async (req, res) => {
+  try {
+    const signature = req.headers["x-razorpay-signature"];
+    const rawBody = req.body;
+    if (!razorpay.verifyWebhookSignature(rawBody, signature)) {
+      res.status(400).json({ error: "Invalid webhook signature" });
+      return;
+    }
+    const event = JSON.parse(rawBody.toString("utf8"));
+    if (event.event !== "payment.captured") {
+      res.json({ ok: true, ignored: true });
+      return;
+    }
+    const payment = event.payload && event.payload.payment && event.payload.payment.entity;
+    if (!payment || !payment.order_id) {
+      res.json({ ok: true, ignored: true });
+      return;
+    }
+    const row = await db.query(
+      `SELECT r.registration_number, t.slug
+       FROM payments pay
+       JOIN registrations r ON r.id = pay.registration_id
+       JOIN tournaments t ON t.id = r.tournament_id
+       WHERE pay.gateway_order_id = $1`,
+      [payment.order_id]
+    );
+    if (!row.rows[0]) {
+      res.json({ ok: true, ignored: true });
+      return;
+    }
+    await completeRegistrationPaid(
+      row.rows[0].slug,
+      row.rows[0].registration_number,
+      payment.id,
+      payment.order_id
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use(express.json({ limit: "1mb" }));
+
+app.post("/api/webhooks/whatsapp", (req, res) => {
+  try {
+    whatsapp.handleWebhookPayload(req.body || {});
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    res.status(200).json({ ok: true });
+  }
+});
+app.use(
+  session({
+    name: "crickipedia.sid",
+    secret: process.env.SESSION_SECRET || "dev-only-change-me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    }
+  })
+);
+app.use("/uploads", express.static(uploadDir));
+
+const siteRoot = path.join(__dirname, "..");
+const publicPathReserved = new Set([
+  "api", "uploads", "admin.html", "index.html", "register.html", "stats.html", "stats.js",
+  "balancesheet.html", "balancesheet.js",
+  "players.html", "players.js", "player.html", "player.js",
+  "app.js", "cricket-theme.css", "favicon.ico"
+]);
+
+function sendHomePage(req, res) {
+  res.sendFile(path.join(siteRoot, "index.html"));
+}
+
+const REGISTER_BOOTSTRAP_MARKER =
+  '<script type="application/json" id="crickipedia-bootstrap"></script>';
+let registerHtmlTemplate = null;
+
+function getRegisterHtmlTemplate() {
+  if (!registerHtmlTemplate) {
+    registerHtmlTemplate = fs.readFileSync(path.join(siteRoot, "register.html"), "utf8");
+  }
+  return registerHtmlTemplate;
+}
+
+function publicTournamentConfigResponse(loaded, preview) {
+  const paymentConfig = buildTournamentPaymentConfig(loaded.tournament);
+  if (loaded.tournament.status === "DRAFT" && !preview) {
+    return { tournament: loaded.tournament, state: "DRAFT", paymentConfig };
+  }
+  return {
+    tournament: loaded.tournament,
+    state: publicState(loaded.tournament),
+    paymentConfig
+  };
+}
+
+function sendRegisterPagePlain(req, res) {
+  res.sendFile(path.join(siteRoot, "register.html"));
+}
+
+function sendRegisterPageWithBootstrap(res, configPayload, preview) {
+  const json = JSON.stringify(configPayload).replace(/</g, "\\u003c");
+  const html = getRegisterHtmlTemplate().replace(
+    REGISTER_BOOTSTRAP_MARKER,
+    '<script type="application/json" id="crickipedia-bootstrap">' + json + "</script>"
+  );
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  if (!preview) {
+    res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+  }
+  res.send(html);
+}
+
+async function trySendRegisterWithBootstrap(req, res, sendPlain) {
+  const preview = req.query.preview === "1";
+  let loaded = null;
+  const queryTournament = req.query.tournament || req.query.t;
+  const querySeason = req.query.season || req.query.s;
+  if (queryTournament && querySeason) {
+    loaded = await db.loadTournamentByKeys(String(queryTournament), String(querySeason));
+  } else if (queryTournament && !querySeason) {
+    loaded = await db.loadTournament(String(queryTournament));
+  } else if (req.params.tournament && req.params.season) {
+    loaded = await db.loadTournamentByKeys(
+      String(req.params.tournament),
+      String(req.params.season)
+    );
+  }
+  if (!loaded) {
+    sendPlain();
+    return;
+  }
+  sendRegisterPageWithBootstrap(res, publicTournamentConfigResponse(loaded, preview), preview);
+}
+
+app.get("/", sendHomePage);
+
+app.get("/register.html", async (req, res) => {
+  try {
+    await trySendRegisterWithBootstrap(req, res, () => sendRegisterPagePlain(req, res));
+  } catch (err) {
+    sendRegisterPagePlain(req, res);
+  }
+});
+
+app.get("/:tournament/:season", async (req, res, next) => {
+  const key = String(req.params.tournament || "").toLowerCase();
+  if (key === "api" || publicPathReserved.has(key) || key.includes(".")) return next();
+  try {
+    await trySendRegisterWithBootstrap(req, res, () => sendRegisterPagePlain(req, res));
+  } catch (err) {
+    sendRegisterPagePlain(req, res);
+  }
+});
+
+function slugify(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "tournament";
+}
+
+const TOURNAMENT_API_ROOTS = ["/api/t/:slug", "/api/t/:tournament/:season"];
+
+function mountTournamentRoute(method, suffix, ...handlers) {
+  for (const root of TOURNAMENT_API_ROOTS) {
+    app[method](root + suffix, ...handlers);
+  }
+}
+
+async function loadTournamentFromParams(params) {
+  return db.loadTournamentFromParams(params);
+}
+
+async function resolveRouteSlug(params) {
+  const loaded = await loadTournamentFromParams(params);
+  return loaded ? loaded.row.slug : params.slug || null;
+}
+
+function prefixFromSlug(slug) {
+  return String(slug || "CPL")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 12) || "REG";
+}
+
+function requireAdmin(req, res, next) {
+  if (req.session && req.session.admin) {
+    next();
+    return;
+  }
+  res.status(401).json({ error: "Sign in required" });
+}
+
+function requireSuperadmin(req, res, next) {
+  if (!req.session || !req.session.admin) {
+    res.status(401).json({ error: "Sign in required" });
+    return;
+  }
+  if (!admins.isSuperadmin(req.session.admin)) {
+    res.status(403).json({ error: "Superadmin access required" });
+    return;
+  }
+  next();
+}
+
+async function requireTournamentAccess(req, res, next) {
+  if (!req.session || !req.session.admin) {
+    res.status(401).json({ error: "Sign in required" });
+    return;
+  }
+  const slug = adminTournamentSlug(req) || req.params.slug;
+  if (!slug) {
+    res.status(400).json({ error: "Tournament slug required" });
+    return;
+  }
+  const row = await db.loadTournamentRow(slug);
+  if (!row) {
+    res.status(404).json({ error: "Tournament not found" });
+    return;
+  }
+  if (!admins.canAccessTournamentId(req.session.admin, row.id)) {
+    res.status(403).json({ error: "No access to this tournament" });
+    return;
+  }
+  next();
+}
+
+async function adminSessionMe(sessionAdmin) {
+  const payload = {
+    username: sessionAdmin.username,
+    role: sessionAdmin.role,
+    tournamentIds: sessionAdmin.tournamentIds || []
+  };
+  if (sessionAdmin.role === admins.ROLE_TOURNAMENT) {
+    const slugs = [];
+    for (const id of sessionAdmin.tournamentIds || []) {
+      const row = await db.query("SELECT slug, name FROM tournaments WHERE id = $1", [id]);
+      if (row.rows[0]) slugs.push({ id, slug: row.rows[0].slug, name: row.rows[0].name });
+    }
+    payload.tournaments = slugs;
+  }
+  return payload;
+}
+
+function publicState(tournament) {
+  if (!tournament) return "DRAFT";
+  if (tournament.status === "DRAFT") return "DRAFT";
+  if (tournament.status === "CLOSED") return "CLOSED";
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  if (tournament.registrationStart && todayKey < tournament.registrationStart) return "UPCOMING";
+  if (tournament.registrationEnd && todayKey > tournament.registrationEnd) return "CLOSED";
+  return "OPEN";
+}
+
+function canPublicRegister(tournament, preview) {
+  const state = publicState(tournament);
+  return state === "OPEN" || (preview && state !== "CLOSED");
+}
+
+async function uniqueSlug(base) {
+  let slug = base;
+  let i = 2;
+  while (true) {
+    const found = await db.query("SELECT 1 FROM tournaments WHERE slug = $1", [slug]);
+    if (!found.rows.length) return slug;
+    slug = `${base}-${i}`;
+    i += 1;
+  }
+}
+
+function nextRegId(tournament) {
+  const prefix = tournament.idPrefix || prefixFromSlug(tournament.slug);
+  const suffix =
+    Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${prefix}-${suffix}`;
+}
+
+function tournamentPaymentMode(tournament) {
+  const payment = settingsUtil.mergePaymentSettings(tournament);
+  if (payment.mode === "manual_qr") return "manual_qr";
+  return "razorpay";
+}
+
+const REGISTRATION_CLIENT_SELECT = `
+  SELECT r.registration_number, r.category, r.extra_fields, r.status, r.registered_at,
+         t.slug, p.full_name, p.date_of_birth, p.flat_number, p.whatsapp_number, p.photo_url,
+         p.cricheroes_url, p.instagram_url,
+         pref.skill, pref.suggested_jersey_number, pref.jersey_size, pref.sleeve_type,
+         pay.payment_status, pay.verification_status, pay.receipt_url, pay.receipt_upi_ref, pay.reject_reason
+  FROM registrations r
+  JOIN tournaments t ON t.id = r.tournament_id
+  JOIN players p ON p.id = r.player_id
+  LEFT JOIN player_preferences pref ON pref.player_id = p.id
+  LEFT JOIN payments pay ON pay.registration_id = r.id`;
+
+async function findRegistration(slug, phoneOrId) {
+  const result = await db.query(
+    `${REGISTRATION_CLIENT_SELECT}
+     WHERE t.slug = $1 AND (p.whatsapp_number = $2 OR r.registration_number = $2)
+     LIMIT 1`,
+    [slug, phoneOrId]
+  );
+  return result.rows[0] ? db.registrationToClient(result.rows[0]) : null;
+}
+
+const ACTIVE_REG_CATEGORY_MATCH =
+  "LOWER(TRIM(COALESCE(r.category, ''))) = LOWER(TRIM(COALESCE($3::text, '')))";
+
+function duplicateRegistrationMessage(category) {
+  const cat = String(category || "").trim();
+  return cat
+    ? `This WhatsApp number is already registered in ${cat}.`
+    : "This WhatsApp number is already registered for this tournament.";
+}
+
+/** Active registration for phone + category (declined / rejected receipts do not count). */
+async function findActiveRegistrationByPhone(slug, phone, category) {
+  const result = await db.query(
+    `${REGISTRATION_CLIENT_SELECT}
+     WHERE t.slug = $1 AND p.whatsapp_number = $2
+       AND ${ACTIVE_REG_CATEGORY_MATCH}
+       AND r.status <> 'RECEIPT_REJECTED'
+       AND COALESCE(pay.verification_status, '') <> 'REJECTED'
+     ORDER BY r.registered_at DESC
+     LIMIT 1`,
+    [slug, phone, category || ""]
+  );
+  return result.rows[0] ? db.registrationToClient(result.rows[0]) : null;
+}
+
+async function findRegistrationPayment(slug, registrationNumber) {
+  const result = await db.query(
+    `SELECT r.id AS registration_id, r.registration_number, r.status AS registration_status,
+            pay.id AS payment_id, pay.amount, pay.payment_status, pay.gateway_order_id,
+            p.full_name, p.whatsapp_number,
+            t.name AS tournament_name, t.entry_fee
+     FROM registrations r
+     JOIN tournaments t ON t.id = r.tournament_id
+     JOIN players p ON p.id = r.player_id
+     LEFT JOIN payments pay ON pay.registration_id = r.id
+     WHERE t.slug = $1 AND r.registration_number = $2`,
+    [slug, registrationNumber]
+  );
+  return result.rows[0] || null;
+}
+
+async function markRegistrationPaid(slug, registrationNumber, gateway, paymentId, orderId) {
+  const row = await findRegistrationPayment(slug, registrationNumber);
+  if (!row) return null;
+  if (row.payment_status === "PAID" || row.registration_status === "PAID") {
+    await ledger.ensureRegistrationCredit(db.query, slug, row.registration_id);
+    return findRegistration(slug, registrationNumber);
+  }
+  await db.query(
+    `UPDATE payments
+     SET payment_status = 'PAID', paid_at = NOW(), gateway = $2,
+         verification_status = 'APPROVED', reject_reason = NULL,
+         gateway_transaction_id = $3, gateway_order_id = COALESCE(gateway_order_id, $4)
+     WHERE registration_id = $1`,
+    [row.registration_id, gateway || "RAZORPAY", paymentId || null, orderId || null]
+  );
+  await db.query("UPDATE registrations SET status = 'PAID' WHERE id = $1", [row.registration_id]);
+  await ledger.ensureRegistrationCredit(db.query, slug, row.registration_id);
+  return findRegistration(slug, registrationNumber);
+}
+
+async function completeRegistrationPaid(slug, registrationNumber, paymentId, orderId) {
+  const loaded = await db.loadTournament(slug);
+  const record = await markRegistrationPaid(slug, registrationNumber, "RAZORPAY", paymentId, orderId);
+  if (record && loaded && notifications.shouldNotifyConfirmedOnRazorpay(loaded.tournament)) {
+    notifications.notifyConfirmed(loaded.tournament, record).catch(() => {});
+  }
+  return record;
+}
+
+function buildUpiUri(payment, tournament, registrationNumber, categoryName) {
+  const upiId = String(payment.upiId || "").trim();
+  if (!upiId) return "";
+  const amount = settingsUtil.entryFeeForCategory(tournament, categoryName).toFixed(2);
+  const payee = encodeURIComponent(payment.upiPayeeName || tournament.name || "Tournament");
+  const note = encodeURIComponent(`Reg ${registrationNumber}`);
+  return `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${payee}&am=${amount}&cu=INR&tn=${note}`;
+}
+
+function buildTournamentPaymentConfig(tournament) {
+  const payment = settingsUtil.mergePaymentSettings(tournament);
+  const mode = tournamentPaymentMode(tournament);
+  const razorpayAvailable = razorpay.enabled();
+  const body = {
+    mode,
+    payment,
+    razorpayAvailable,
+    razorpayKeyId: mode === "razorpay" && razorpayAvailable ? razorpay.keyId() : null
+  };
+  if (mode === "manual_qr") {
+    body.qrImageUrl = payment.qrImageUrl || "";
+    body.upiUri = payment.qrSource === "upi" ? buildUpiUri(payment, tournament, "") : "";
+    body.paymentInstructions = payment.paymentInstructions || "";
+  }
+  return body;
+}
+
+app.get("/api/health", async (req, res) => {
+  try {
+    await db.query("SELECT 1");
+    res.json({
+      ok: true,
+      db: true,
+      driver: db.getDriver(),
+      photos: photoStorage.enabled() ? "supabase" : "local",
+      payments: razorpay.enabled() ? "razorpay" : "demo",
+      whatsapp: whatsapp.enabled() ? "cloud_api" : "off",
+      whatsappWebhook: whatsapp.webhookConfigured() ? "configured" : "off"
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, db: false, error: err.message });
+  }
+});
+
+app.get("/api/payments/config", (req, res) => {
+  res.json({
+    mode: razorpay.enabled() ? "razorpay" : "demo",
+    keyId: razorpay.enabled() ? razorpay.keyId() : null
+  });
+});
+
+mountTournamentRoute("get", "/payments/config", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    res.json(buildTournamentPaymentConfig(loaded.tournament));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function paymentQrPayload(slug, registrationId, categoryOverride) {
+  const loaded = await db.loadTournament(slug);
+  if (!loaded) return null;
+  const payment = settingsUtil.mergePaymentSettings(loaded.tournament);
+  let categoryName = String(categoryOverride || "").trim();
+  if (!categoryName && registrationId) {
+    const record = await findRegistration(slug, registrationId);
+    categoryName = record && record.category ? String(record.category).trim() : "";
+  }
+  const qrImageUrl = settingsUtil.resolvePaymentQrImageUrl(loaded.tournament, categoryName);
+  const upiUri = buildUpiUri(payment, loaded.tournament, registrationId || "", categoryName);
+  if (!upiUri) {
+    return { upiUri: "", qrDataUrl: "", qrImageUrl };
+  }
+  const QRCode = require("qrcode");
+  const qrDataUrl = await QRCode.toDataURL(upiUri, { margin: 1, width: 280 });
+  return { upiUri, qrDataUrl, qrImageUrl };
+}
+
+mountTournamentRoute("get", "/registrations/:id/photo-image", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).end();
+      return;
+    }
+    if (loaded.tournament.status === "DRAFT" && req.query.preview !== "1") {
+      res.status(404).end();
+      return;
+    }
+    if (loaded.tournament.showPublicRoster === false) {
+      res.status(404).end();
+      return;
+    }
+    const found = await db.query(
+      `SELECT p.photo_url
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       JOIN players p ON p.id = r.player_id
+       WHERE t.slug = $1 AND r.registration_number = $2`,
+      [loaded.row.slug, req.params.id]
+    );
+    const photoUrl = found.rows[0] ? found.rows[0].photo_url : "";
+    if (!photoUrl) {
+      res.status(404).end();
+      return;
+    }
+    const file = await photoStorage.streamPaymentQr(photoUrl);
+    if (!file) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(file.buffer);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+mountTournamentRoute("get", "/payment-qr-image", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).end();
+      return;
+    }
+    const categoryName = String(req.query.category || "").trim();
+    const qrImageUrl = settingsUtil.resolvePaymentQrImageUrl(loaded.tournament, categoryName);
+    if (!qrImageUrl) {
+      res.status(404).end();
+      return;
+    }
+    if (/^https?:\/\//i.test(qrImageUrl)) {
+      res.redirect(302, qrImageUrl);
+      return;
+    }
+    const file = await photoStorage.streamPaymentQr(qrImageUrl);
+    if (!file) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(file.buffer);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+mountTournamentRoute("get", "/jersey-size-chart-image", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).end();
+      return;
+    }
+    const chartUrl = loaded.tournament.jerseySizeChartUrl || "";
+    if (!chartUrl) {
+      res.status(404).end();
+      return;
+    }
+    const file = await photoStorage.streamPaymentQr(chartUrl);
+    if (!file) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(file.buffer);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+mountTournamentRoute("get", "/payment-qr", async (req, res) => {
+  try {
+    const slug = await resolveRouteSlug(req.params);
+    const categoryName = String(req.query.category || "").trim();
+    const data = await paymentQrPayload(slug, "", categoryName);
+    if (!data) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("get", "/registrations/:id/payment-qr", async (req, res) => {
+  try {
+    const slug = await resolveRouteSlug(req.params);
+    const data = await paymentQrPayload(slug, req.params.id);
+    if (!data) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/tournaments", async (req, res) => {
+  try {
+    const preview = req.query.preview === "1";
+    const all = await db.listTournamentsClient();
+    const list = [];
+    for (const tournament of all) {
+      const state = publicState(tournament);
+      if (preview || state === "OPEN" || state === "UPCOMING" || state === "CLOSED") {
+        if (!preview && tournament.status === "DRAFT") continue;
+        list.push({
+          ...tournament,
+          state,
+          paymentConfig: buildTournamentPaymentConfig(tournament)
+        });
+      }
+    }
+    if (!preview) {
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    }
+    res.json({ tournaments: list });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("get", "/config", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const preview = req.query.preview === "1";
+    if (!preview) {
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    }
+    res.json(publicTournamentConfigResponse(loaded, preview));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("get", "/lookup", async (req, res) => {
+  try {
+    const phone = String(req.query.phone || "").replace(/\D/g, "");
+    if (phone.length !== 10) {
+      res.json({ record: null });
+      return;
+    }
+    const slug = await resolveRouteSlug(req.params);
+    const category = String(req.query.category || "").trim();
+    res.json({ record: await findActiveRegistrationByPhone(slug, phone, category) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("get", "/roster", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    if (loaded.tournament.status === "DRAFT" && req.query.preview !== "1") {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (loaded.tournament.showPublicRoster === false) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const slug = loaded.row.slug;
+    const result = await db.query(
+      `SELECT r.registration_number, r.category, r.status, r.registered_at,
+              p.full_name, p.photo_url,
+              pay.payment_status, pay.verification_status
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       JOIN players p ON p.id = r.player_id
+       LEFT JOIN payments pay ON pay.registration_id = r.id
+       WHERE t.slug = $1
+       ORDER BY r.registered_at ASC`,
+      [slug]
+    );
+    const categories = settingsUtil.categoryNames(loaded.tournament.categories);
+    res.json({
+      categories,
+      players: result.rows.map(db.rosterToClient)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function sendLedgerEntryAttachment(res, tournamentId, entryId) {
+  const row = await ledger.fetchEntryWithContext(db.query, tournamentId, entryId);
+  if (!row) {
+    res.status(404).end();
+    return;
+  }
+  const url = ledger.resolveAttachmentUrl(row);
+  if (!url) {
+    res.status(404).json({ error: "No attachment for this entry" });
+    return;
+  }
+  const file = await photoStorage.streamPaymentQr(url);
+  if (!file) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("Content-Type", file.contentType);
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.send(file.buffer);
+}
+
+mountTournamentRoute("get", "/ledger", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    if (loaded.tournament.status === "DRAFT" && req.query.preview !== "1") {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const rows = await ledger.listEntries(db.query, loaded.row.id);
+    const summary = await ledger.summarize(db.query, loaded.row.id);
+    res.json({
+      tournament: {
+        name: loaded.tournament.name,
+        slug: loaded.row.slug,
+        tournamentSlug: loaded.row.tournament_slug,
+        seasonSlug: loaded.row.season_slug
+      },
+      summary,
+      entries: rows.map((row) => ledger.entryToPublic(row))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("get", "/ledger/:entryId/attachment", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const entryId = Number(req.params.entryId);
+    if (!Number.isFinite(entryId)) {
+      res.status(400).json({ error: "Invalid entry" });
+      return;
+    }
+    await sendLedgerEntryAttachment(res, loaded.row.id, entryId);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute(
+  "post",
+  "/register",
+  withUploadFields([
+    { name: "photo", maxCount: 1 },
+    { name: "receipt", maxCount: 1 }
+  ]),
+  async (req, res) => {
+  try {
+    const preview = req.query.preview === "1" || req.body.preview === true;
+    const loaded = await db.loadTournamentFromParams(req.params, { sponsors: false });
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const slug = loaded.row.slug;
+    if (!canPublicRegister(loaded.tournament, preview)) {
+      res.status(400).json({ error: "Registration is not open" });
+      return;
+    }
+
+    const customFieldsBody = settingsUtil.parseCustomFieldsInput(req.body.customFields);
+
+    const name = String(req.body.name || "").trim();
+    const phone = String(req.body.phone || "").replace(/\D/g, "");
+    const skill = String(req.body.skill || "").trim();
+    if (name.length < 2) {
+      res.status(400).json({ error: "Full name is required" });
+      return;
+    }
+    if (phone.length !== 10) {
+      res.status(400).json({ error: "WhatsApp number must be 10 digits" });
+      return;
+    }
+    if (!skill) {
+      res.status(400).json({ error: "Select a playing skill" });
+      return;
+    }
+    const fieldErrors = settingsUtil.validateRegistrationFields(loaded.tournament, {
+      ...req.body,
+      customFields: customFieldsBody
+    });
+    if (fieldErrors.length) {
+      res.status(400).json({ error: fieldErrors[0] });
+      return;
+    }
+    const flat = String(req.body.flat || "").trim();
+    const category = String(req.body.category || "").trim();
+    const wantCategory = settingsUtil.fieldModeForTournament(loaded.tournament, "category") !== "off";
+    const extraFields = settingsUtil.sanitizeCustomFieldValues(
+      loaded.tournament,
+      customFieldsBody
+    );
+    const allowed = settingsUtil.categoryNames(loaded.tournament.categories);
+    if (wantCategory && allowed.length && category && allowed.indexOf(category) === -1) {
+      res.status(400).json({ error: "Invalid registration category" });
+      return;
+    }
+
+    const dob = req.body.dob || null;
+    const jersey = req.body.jersey === "" || req.body.jersey == null ? null : Number(req.body.jersey);
+    const size = req.body.size || null;
+    const sleeve = req.body.sleeve || null;
+    const cricheroes = req.body.cricheroes || null;
+    const instagram = req.body.instagram || null;
+    const registrationNumber = nextRegId(loaded.tournament);
+    const payMode = tournamentPaymentMode(loaded.tournament);
+    const photoFile = firstUploadedFile(req, "photo");
+    const receiptFile = firstUploadedFile(req, "receipt");
+    const upiRef = String(req.body.upiRef || req.body.receiptUpi || "").trim();
+    let verificationStatus = payMode === "manual_qr" ? "AWAITING_RECEIPT" : "";
+
+    if (payMode === "manual_qr") {
+      const paymentSettings = settingsUtil.mergePaymentSettings(loaded.tournament);
+      const allowImage = paymentSettings.receiptImage !== "hidden";
+      const allowUpi = paymentSettings.receiptUpiRef !== "hidden";
+      if (paymentSettings.receiptImage === "required" && allowImage && !receiptFile) {
+        res.status(400).json({ error: "Payment receipt image is required" });
+        return;
+      }
+      if (paymentSettings.receiptUpiRef === "required" && allowUpi && !upiRef) {
+        res.status(400).json({ error: "UPI transaction ID is required" });
+        return;
+      }
+    }
+
+    const priorReg = await findActiveRegistrationByPhone(slug, phone, category);
+    if (priorReg) {
+      res.status(409).json({ error: duplicateRegistrationMessage(category) });
+      return;
+    }
+
+    const photoMode = settingsUtil.fieldModeForTournament(loaded.tournament, "photo");
+    const playerPhotoRow = await db.query(
+      "SELECT photo_url FROM players WHERE whatsapp_number = $1",
+      [phone]
+    );
+    const storedPhotoUrl = playerPhotoRow.rows[0] ? playerPhotoRow.rows[0].photo_url || "" : "";
+    if (photoMode === "required" && !storedPhotoUrl && !photoFile) {
+      res.status(400).json({ error: "Profile photo is required" });
+      return;
+    }
+
+    const saved = await db.withTransaction(async (client) => {
+      let player = await client.query(
+        "SELECT id, photo_url FROM players WHERE whatsapp_number = $1",
+        [phone]
+      );
+      let playerId;
+      let photoUrl = "";
+      if (player.rows[0]) {
+        playerId = player.rows[0].id;
+        const dup = await client.query(
+          `SELECT r.registration_number
+           FROM registrations r
+           LEFT JOIN payments pay ON pay.registration_id = r.id
+           WHERE r.tournament_id = $1 AND r.player_id = $2
+             AND LOWER(TRIM(COALESCE(r.category, ''))) = LOWER(TRIM(COALESCE($3::text, '')))
+             AND r.status <> 'RECEIPT_REJECTED'
+             AND COALESCE(pay.verification_status, '') <> 'REJECTED'
+           LIMIT 1`,
+          [loaded.row.id, playerId, category || ""]
+        );
+        if (dup.rows[0]) {
+          return { duplicate: true };
+        }
+        const updated = await client.query(
+          `UPDATE players
+           SET full_name = $2, date_of_birth = COALESCE($3, date_of_birth),
+               flat_number = COALESCE($4, flat_number),
+               cricheroes_url = COALESCE($5, cricheroes_url),
+               instagram_url = COALESCE($6, instagram_url),
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING photo_url`,
+          [playerId, name, dob, flat || null, cricheroes, instagram]
+        );
+        photoUrl = updated.rows[0].photo_url || "";
+      } else {
+        player = await client.query(
+          `INSERT INTO players (full_name, date_of_birth, flat_number, whatsapp_number, cricheroes_url, instagram_url)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, photo_url`,
+          [name, dob, flat || null, phone, cricheroes, instagram]
+        );
+        playerId = player.rows[0].id;
+        photoUrl = player.rows[0].photo_url || "";
+      }
+
+      await client.query(
+        `INSERT INTO player_preferences (player_id, skill, suggested_jersey_number, jersey_size, sleeve_type)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (player_id) DO UPDATE SET
+           skill = EXCLUDED.skill,
+           suggested_jersey_number = COALESCE(EXCLUDED.suggested_jersey_number, player_preferences.suggested_jersey_number),
+           jersey_size = COALESCE(EXCLUDED.jersey_size, player_preferences.jersey_size),
+           sleeve_type = COALESCE(EXCLUDED.sleeve_type, player_preferences.sleeve_type)`,
+        [playerId, skill, Number.isFinite(jersey) ? jersey : null, size, sleeve]
+      );
+
+      const registration = await client.query(
+        `INSERT INTO registrations (registration_number, tournament_id, player_id, category, extra_fields, status)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'PENDING_PAYMENT') RETURNING id, registered_at`,
+        [registrationNumber, loaded.row.id, playerId, category || null, JSON.stringify(extraFields)]
+      );
+      const gateway = payMode === "manual_qr" ? "MANUAL_QR" : payMode === "razorpay" ? "RAZORPAY" : "DEMO";
+      await client.query(
+        `INSERT INTO payments (registration_id, amount, payment_status, gateway, verification_status)
+         VALUES ($1, $2, 'PENDING', $3, $4)`,
+        [
+          registration.rows[0].id,
+          settingsUtil.entryFeeForCategory(loaded.tournament, category),
+          gateway,
+          payMode === "manual_qr" ? "AWAITING_RECEIPT" : null
+        ]
+      );
+      return {
+        duplicate: false,
+        registeredAt: registration.rows[0].registered_at,
+        registrationId: registration.rows[0].id,
+        photoUrl
+      };
+    });
+
+    if (saved.duplicate) {
+      res.status(409).json({ error: duplicateRegistrationMessage(category) });
+      return;
+    }
+
+    const tournamentId = loaded.row.id;
+    let finalPhotoUrl = saved.photoUrl;
+    try {
+      if (photoFile) {
+        finalPhotoUrl = await withUploadRetry(
+          () => persistPlayerPhotoForPhone(phone, photoFile),
+          3
+        );
+      }
+      if (photoMode === "required" && !finalPhotoUrl) {
+        throw new Error("Profile photo could not be saved");
+      }
+
+      if (payMode === "manual_qr") {
+        const paymentSettings = settingsUtil.mergePaymentSettings(loaded.tournament);
+        const allowImage = paymentSettings.receiptImage !== "hidden";
+        const allowUpi = paymentSettings.receiptUpiRef !== "hidden";
+        const hasReceiptPayload = (receiptFile && allowImage) || (upiRef && allowUpi);
+        if (hasReceiptPayload) {
+          let receiptUrl = null;
+          if (receiptFile && allowImage) {
+            receiptUrl = await withUploadRetry(
+              () => photoStorage.saveReceipt(saved.registrationId, receiptFile),
+              3
+            );
+          }
+          await db.query(
+            `UPDATE payments
+             SET receipt_url = COALESCE($2, receipt_url),
+                 receipt_upi_ref = CASE WHEN $3::text IS NOT NULL AND $3 <> '' THEN $3 ELSE receipt_upi_ref END,
+                 verification_status = 'SUBMITTED',
+                 reject_reason = NULL,
+                 gateway = 'MANUAL_QR'
+             WHERE registration_id = $1`,
+            [saved.registrationId, receiptUrl, allowUpi ? upiRef : null]
+          );
+          await db.query(
+            "UPDATE registrations SET status = 'RECEIPT_SUBMITTED' WHERE id = $1",
+            [saved.registrationId]
+          );
+          verificationStatus = "SUBMITTED";
+        }
+      }
+    } catch (postErr) {
+      await deleteRegistrationForTournament(tournamentId, registrationNumber);
+      res.status(500).json({
+        error: postErr.message || "Registration could not be completed. Please try again."
+      });
+      return;
+    }
+
+    const record = db.buildRegistrationClient({
+      slug,
+      registrationNumber,
+      name,
+      phone,
+      dob,
+      flat,
+      skill,
+      category,
+      jersey,
+      size,
+      sleeve,
+      cricheroes,
+      instagram,
+      photoUrl: finalPhotoUrl,
+      registeredAt: saved.registeredAt,
+      extraFields,
+      verificationStatus
+    });
+    res.status(201).json({ record });
+    setImmediate(() => {
+      notifications.notifyReserved(loaded.tournament, record).catch((err) => {
+        console.error("Reserved WhatsApp:", err.message);
+      });
+    });
+  } catch (err) {
+    if (err.code === "23505") {
+      const category = String(req.body.category || "").trim();
+      res.status(409).json({ error: duplicateRegistrationMessage(category) });
+      return;
+    }
+    res.status(500).json({ error: err.message });
+  }
+  }
+);
+
+mountTournamentRoute("post", "/registrations/:id/photo", upload.single("photo"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "Choose a photo" });
+      return;
+    }
+    const slug = await resolveRouteSlug(req.params);
+    const found = await db.query(
+      `SELECT p.id
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       JOIN players p ON p.id = r.player_id
+       WHERE t.slug = $1 AND r.registration_number = $2`,
+      [slug, req.params.id]
+    );
+    if (!found.rows[0]) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    const photoUrl = await photoStorage.savePlayerPhoto(found.rows[0].id, req.file);
+    await db.query("UPDATE players SET photo_url = $2, updated_at = NOW() WHERE id = $1", [
+      found.rows[0].id,
+      photoUrl
+    ]);
+    res.json({ record: await findRegistration(slug, req.params.id), photoUrl });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("post", "/registrations/:id/receipt", upload.single("receipt"), async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const slug = loaded.row.slug;
+    if (tournamentPaymentMode(loaded.tournament) !== "manual_qr") {
+      res.status(400).json({ error: "This tournament does not accept receipt uploads" });
+      return;
+    }
+    const paymentSettings = settingsUtil.mergePaymentSettings(loaded.tournament);
+    const upiRef = String(req.body.upiRef || req.body.upi_ref || "").trim();
+    const needImage = paymentSettings.receiptImage === "required";
+    const needUpi = paymentSettings.receiptUpiRef === "required";
+    const allowImage = paymentSettings.receiptImage !== "hidden";
+    const allowUpi = paymentSettings.receiptUpiRef !== "hidden";
+    if (needImage && allowImage && !req.file) {
+      res.status(400).json({ error: "Payment receipt image is required" });
+      return;
+    }
+    if (needUpi && allowUpi && !upiRef) {
+      res.status(400).json({ error: "UPI transaction ID is required" });
+      return;
+    }
+    const found = await db.query(
+      `SELECT r.id AS registration_id, pay.payment_status
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       LEFT JOIN payments pay ON pay.registration_id = r.id
+       WHERE t.slug = $1 AND r.registration_number = $2`,
+      [slug, req.params.id]
+    );
+    if (!found.rows[0]) {
+      if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    if (found.rows[0].payment_status === "PAID") {
+      res.status(400).json({ error: "Already confirmed" });
+      return;
+    }
+    let receiptUrl = null;
+    if (req.file && allowImage) {
+      receiptUrl = await photoStorage.saveReceipt(found.rows[0].registration_id, req.file);
+    }
+    await db.query(
+      `UPDATE payments
+       SET receipt_url = COALESCE($2, receipt_url),
+           receipt_upi_ref = CASE WHEN $3::text IS NOT NULL AND $3 <> '' THEN $3 ELSE receipt_upi_ref END,
+           verification_status = 'SUBMITTED',
+           reject_reason = NULL,
+           gateway = 'MANUAL_QR'
+       WHERE registration_id = $1`,
+      [found.rows[0].registration_id, receiptUrl, allowUpi ? upiRef : null]
+    );
+    await db.query(
+      "UPDATE registrations SET status = 'RECEIPT_SUBMITTED' WHERE id = $1",
+      [found.rows[0].registration_id]
+    );
+    res.json({ record: await findRegistration(slug, req.params.id) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("post", "/registrations/:id/payment-order", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    const slug = loaded.row.slug;
+    if (!loaded || tournamentPaymentMode(loaded.tournament) !== "razorpay") {
+      res.status(400).json({ error: "Online card/UPI checkout is not enabled for this tournament" });
+      return;
+    }
+    if (!razorpay.enabled()) {
+      res.status(400).json({ error: "Razorpay is not configured on the server" });
+      return;
+    }
+    const row = await findRegistrationPayment(slug, req.params.id);
+    if (!row) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    if (row.payment_status === "PAID" || row.registration_status === "PAID") {
+      res.json({ record: await findRegistration(slug, req.params.id), alreadyPaid: true });
+      return;
+    }
+    const amountPaise = razorpay.amountToPaise(Number(row.amount != null ? row.amount : row.entry_fee));
+    if (amountPaise < 100) {
+      res.status(400).json({ error: "Entry fee must be at least ₹1" });
+      return;
+    }
+    const order = await razorpay.createOrder({
+      amountPaise,
+      receipt: row.registration_number,
+      notes: {
+        slug,
+        registration_number: row.registration_number
+      }
+    });
+    await db.query(
+      `UPDATE payments SET gateway = 'RAZORPAY', gateway_order_id = $2 WHERE registration_id = $1`,
+      [row.registration_id, order.id]
+    );
+    res.json({
+      keyId: razorpay.keyId(),
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      name: row.tournament_name,
+      description: `Registration ${row.registration_number}`,
+      prefill: {
+        name: row.full_name || "",
+        contact: row.whatsapp_number || ""
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("post", "/registrations/:id/pay-verify", async (req, res) => {
+  try {
+    const slug = await resolveRouteSlug(req.params);
+    if (!razorpay.enabled()) {
+      res.status(400).json({ error: "Online payments are not configured" });
+      return;
+    }
+    const orderId = String(req.body.razorpay_order_id || "");
+    const paymentId = String(req.body.razorpay_payment_id || "");
+    const signature = String(req.body.razorpay_signature || "");
+    if (!orderId || !paymentId || !signature) {
+      res.status(400).json({ error: "Missing payment details" });
+      return;
+    }
+    if (!razorpay.verifyPaymentSignature(orderId, paymentId, signature)) {
+      res.status(400).json({ error: "Payment verification failed" });
+      return;
+    }
+    const row = await findRegistrationPayment(slug, req.params.id);
+    if (!row) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    if (row.gateway_order_id && row.gateway_order_id !== orderId) {
+      res.status(400).json({ error: "Order does not match this registration" });
+      return;
+    }
+    const record = await completeRegistrationPaid(slug, req.params.id, paymentId, orderId);
+    res.json({ record });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mountTournamentRoute("post", "/registrations/:id/pay", async (req, res) => {
+  try {
+    const loaded = await loadTournamentFromParams(req.params);
+    const slug = loaded ? loaded.row.slug : null;
+    const mode = loaded ? tournamentPaymentMode(loaded.tournament) : "demo";
+    if (mode === "razorpay") {
+      res.status(400).json({ error: "Use Razorpay checkout for this tournament" });
+      return;
+    }
+    if (mode === "manual_qr") {
+      res.status(400).json({ error: "Pay via QR and upload your receipt" });
+      return;
+    }
+    const found = await db.query(
+      `SELECT r.id
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       WHERE t.slug = $1 AND r.registration_number = $2`,
+      [slug, req.params.id]
+    );
+    if (!found.rows[0]) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    await db.query(
+      `UPDATE payments SET payment_status = 'PAID', paid_at = NOW(), gateway = 'DEMO'
+       WHERE registration_id = $1`,
+      [found.rows[0].id]
+    );
+    await db.query("UPDATE registrations SET status = 'PAID' WHERE id = $1", [found.rows[0].id]);
+    res.json({ record: await findRegistration(slug, req.params.id) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const username = String(req.body.username || "");
+    const password = String(req.body.password || "");
+    const session = await admins.authenticate(db.query, username, password);
+    if (!session) {
+      res.status(401).json({ error: "Wrong username or password" });
+      return;
+    }
+    req.session.admin = session;
+    res.json({ ok: true, ...(await adminSessionMe(session)) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
+});
+
+app.get("/api/admin/me", requireAdmin, async (req, res) => {
+  try {
+    res.json(await adminSessionMe(req.session.admin));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/whatsapp-check", requireSuperadmin, async (req, res) => {
+  try {
+    const result = await whatsapp.verifyCredentials();
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/api/admin/users", requireSuperadmin, async (req, res) => {
+  try {
+    res.json({ users: await admins.listTournamentAdmins(db.query) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/users", requireSuperadmin, async (req, res) => {
+  try {
+    const user = await admins.createTournamentAdmin(db.query, {
+      username: req.body.username,
+      password: req.body.password,
+      tournamentSlug: req.body.tournamentSlug || req.body.slug
+    });
+    res.status(201).json({ user });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.patch("/api/admin/users/:id", requireSuperadmin, async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) {
+      res.status(400).json({ error: "Invalid user id" });
+      return;
+    }
+    if (req.body.password) {
+      const row = await admins.resetTournamentAdminPassword(db.query, userId, req.body.password);
+      if (!row) {
+        res.status(404).json({ error: "Tournament admin not found" });
+        return;
+      }
+    }
+    if (req.body.active !== undefined) {
+      const row = await admins.setTournamentAdminActive(db.query, userId, req.body.active);
+      if (!row) {
+        res.status(404).json({ error: "Tournament admin not found" });
+        return;
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/tournaments", requireAdmin, async (req, res) => {
+  try {
+    let tournaments = await db.listTournamentsClient();
+    const session = req.session.admin;
+    if (session && session.role === admins.ROLE_TOURNAMENT) {
+      const allowed = new Set((session.tournamentIds || []).map(Number));
+      const rows = await db.query(
+        "SELECT id, slug FROM tournaments WHERE id = ANY($1::bigint[])",
+        [[...allowed]]
+      );
+      const slugSet = new Set(rows.rows.map((r) => r.slug));
+      tournaments = tournaments.filter((t) => slugSet.has(t.slug));
+    }
+    res.json({ tournaments });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments", requireSuperadmin, async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim();
+    if (!name) {
+      res.status(400).json({ error: "Name is required" });
+      return;
+    }
+    const sourceSlug = req.body.copyFrom;
+    const source = sourceSlug ? await db.loadTournament(sourceSlug) : null;
+    const base = source ? source.tournament : {
+      ...db.toClient({
+        slug: "new",
+        name,
+        short_name: "",
+        logo_url: "",
+        description: "",
+        registration_start: new Date(),
+        registration_end: new Date(),
+        entry_fee: 0,
+        status: "DRAFT",
+        settings: db.defaultSettings()
+      }, [])
+    };
+    const tournamentSlug = slugify(req.body.tournamentSlug || req.body.slug || name);
+    const seasonSlug = slugify(req.body.seasonSlug || new Date().getFullYear());
+    const pair = await db.query(
+      "SELECT 1 FROM tournaments WHERE tournament_slug = $1 AND season_slug = $2",
+      [tournamentSlug, seasonSlug]
+    );
+    if (pair.rows.length) {
+      res.status(400).json({ error: "That tournament and season URL is already used" });
+      return;
+    }
+    const slug = db.combinedSlug(tournamentSlug, seasonSlug);
+    const shortName = req.body.shortName || name.split(/\s+/).map((part) => part.charAt(0)).join("").toUpperCase().slice(0, 6) || "CUP";
+    const settings = db.settingsFromClient({
+      ...base,
+      ...req.body,
+      idPrefix: req.body.idPrefix || prefixFromSlug(slug)
+    });
+    const inserted = await db.query(
+      `INSERT INTO tournaments
+        (slug, tournament_slug, season_slug, name, short_name, logo_url, description, registration_start, registration_end, entry_fee, status, settings)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'DRAFT', $11::jsonb)
+       RETURNING slug`,
+      [
+        slug,
+        tournamentSlug,
+        seasonSlug,
+        name,
+        shortName,
+        base.logoUrl || "",
+        settings.heroSub,
+        base.registrationStart || "2026-09-20",
+        base.registrationEnd || "2026-09-30",
+        Number(base.fee || 0),
+        JSON.stringify(settings)
+      ]
+    );
+    await db.replaceSponsors(
+      (await db.loadTournament(inserted.rows[0].slug)).row.id,
+      base.sponsors || []
+    );
+    res.status(201).json({ tournament: (await db.loadTournament(inserted.rows[0].slug)).tournament });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/admin/tournaments/:slug", requireSuperadmin, async (req, res) => {
+  try {
+    const existing = await db.loadTournamentRow(req.params.slug);
+    if (!existing) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const tournamentSlug = slugify(
+      req.body.tournamentSlug || existing.tournament_slug
+    );
+    const seasonSlug = slugify(req.body.seasonSlug || existing.season_slug);
+    const nextSlug = db.combinedSlug(tournamentSlug, seasonSlug);
+    const settings = db.settingsFromClient(req.body);
+    const categoryFeeError = settingsUtil.validateCategoryFees(settings);
+    if (categoryFeeError) {
+      res.status(400).json({ error: categoryFeeError });
+      return;
+    }
+    const saved = await db.updateTournamentFromAdmin(existing, {
+      tournamentSlug,
+      seasonSlug,
+      nextSlug,
+      settings,
+      name: String(req.body.name || existing.name).trim(),
+      shortName: req.body.shortName || existing.short_name,
+      logoUrl: req.body.logoUrl || "",
+      registrationStart: req.body.registrationStart,
+      registrationEnd: req.body.registrationEnd,
+      fee: Number(req.body.fee || 0),
+      status: req.body.status || existing.status,
+      sponsors: req.body.sponsors
+    });
+    res.json({ tournament: db.toClient(saved.row, saved.sponsorRows) });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments/:slug/payment-qr", requireSuperadmin, withUpload("qr"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "No QR image uploaded" });
+      return;
+    }
+    const loaded = await db.loadTournament(adminTournamentSlug(req));
+    if (!loaded) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const slugKey = adminTournamentSlug(req);
+    const qrImageUrl = await photoStorage.saveTournamentPaymentQr(slugKey, req.file);
+    const tournament = loaded.tournament;
+    const settings = { ...(loaded.row.settings || {}) };
+    settings.payment = settingsUtil.mergePaymentSettings({
+      payment: {
+        ...(settings.payment || {}),
+        qrImageUrl,
+        qrSource: "image"
+      }
+    });
+    const updated = await db.query(
+      `UPDATE tournaments SET settings = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [loaded.row.id, JSON.stringify(settings)]
+    );
+    const sponsorRows = await db.query(
+      "SELECT * FROM sponsors WHERE tournament_id = $1 AND active = TRUE ORDER BY display_order, id",
+      [loaded.row.id]
+    );
+    res.json({
+      qrImageUrl,
+      tournament: db.toClient(updated.rows[0], sponsorRows.rows)
+    });
+  } catch (err) {
+    if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments/:slug/category-payment-qr", requireSuperadmin, withUpload("qr"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "No QR image uploaded" });
+      return;
+    }
+    const categoryIndex = Number(req.body.categoryIndex);
+    if (!Number.isFinite(categoryIndex) || categoryIndex < 0) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(400).json({ error: "Category index is required" });
+      return;
+    }
+    const loaded = await db.loadTournament(adminTournamentSlug(req));
+    if (!loaded) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const slugKey = adminTournamentSlug(req);
+    const tournament = loaded.tournament;
+    const categories = settingsUtil.normalizeCategories(tournament.categories);
+    if (categoryIndex >= categories.length) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(400).json({ error: "Category not found" });
+      return;
+    }
+    const categoryName = categories[categoryIndex].name;
+    const qrImageUrl = await photoStorage.saveCategoryPaymentQr(
+      slugKey,
+      slugify(categoryName),
+      req.file
+    );
+    categories[categoryIndex] = { ...categories[categoryIndex], qrImageUrl };
+    const settings = { ...(loaded.row.settings || {}) };
+    settings.categories = categories;
+    const updated = await db.query(
+      `UPDATE tournaments SET settings = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [loaded.row.id, JSON.stringify(settings)]
+    );
+    const sponsorRows = await db.query(
+      "SELECT * FROM sponsors WHERE tournament_id = $1 AND active = TRUE ORDER BY display_order, id",
+      [loaded.row.id]
+    );
+    res.json({
+      qrImageUrl,
+      categoryIndex,
+      categoryName,
+      tournament: db.toClient(updated.rows[0], sponsorRows.rows)
+    });
+  } catch (err) {
+    if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments/:slug/jersey-size-chart", requireSuperadmin, withUpload("chart"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "No image uploaded" });
+      return;
+    }
+    const loaded = await db.loadTournament(adminTournamentSlug(req));
+    if (!loaded) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const slugKey = adminTournamentSlug(req);
+    const jerseySizeChartUrl = await photoStorage.saveJerseySizeChart(slugKey, req.file);
+    const settings = { ...(loaded.row.settings || {}) };
+    settings.jerseySizeChartUrl = jerseySizeChartUrl;
+    const updated = await db.query(
+      `UPDATE tournaments SET settings = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [loaded.row.id, JSON.stringify(settings)]
+    );
+    const sponsorRows = await db.query(
+      "SELECT * FROM sponsors WHERE tournament_id = $1 AND active = TRUE ORDER BY display_order, id",
+      [loaded.row.id]
+    );
+    res.json({
+      jerseySizeChartUrl,
+      tournament: db.toClient(updated.rows[0], sponsorRows.rows)
+    });
+  } catch (err) {
+    if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments/:slug/sponsor-logo", requireSuperadmin, withUpload("logo"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "No logo uploaded — choose an image file" });
+      return;
+    }
+    const slugKey = adminTournamentSlug(req);
+    if (!slugKey) {
+      res.status(400).json({ error: "Tournament slug missing" });
+      return;
+    }
+    const loaded = await db.loadTournament(slugKey);
+    if (!loaded) {
+      if (req.file.path) fs.unlink(req.file.path, () => {});
+      res.status(404).json({ error: "Tournament not found — save the tournament first" });
+      return;
+    }
+    const logoUrl = await photoStorage.saveSponsorLogo(slugKey, req.file);
+    res.json({ logoUrl });
+  } catch (err) {
+    if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message || "Could not save sponsor logo" });
+  }
+});
+
+app.delete("/api/admin/tournaments/:slug", requireSuperadmin, async (req, res) => {
+  try {
+    const count = await db.query("SELECT count(*)::int AS n FROM tournaments");
+    if (count.rows[0].n < 2) {
+      res.status(400).json({ error: "Keep at least one tournament" });
+      return;
+    }
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    await db.query("DELETE FROM tournaments WHERE id = $1", [loaded.row.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function adminRegistrationAsset(slug, registrationNumber, field) {
+  const result = await db.query(
+    `SELECT p.photo_url, pay.receipt_url
+     FROM registrations r
+     JOIN tournaments t ON t.id = r.tournament_id
+     JOIN players p ON p.id = r.player_id
+     LEFT JOIN payments pay ON pay.registration_id = r.id
+     WHERE t.slug = $1 AND r.registration_number = $2`,
+    [slug, registrationNumber]
+  );
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  if (field === "photo") return row.photo_url || "";
+  if (field === "receipt") return row.receipt_url || "";
+  return "";
+}
+
+app.get("/api/admin/tournaments/:slug/registrations/:id/photo-image", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const photoUrl = await adminRegistrationAsset(req.params.slug, req.params.id, "photo");
+    if (!photoUrl) {
+      res.status(404).end();
+      return;
+    }
+    const file = await photoStorage.streamPaymentQr(photoUrl);
+    if (!file) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Cache-Control", "private, max-age=120");
+    res.send(file.buffer);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+app.get("/api/admin/tournaments/:slug/registrations/:id/receipt-image", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const receiptUrl = await adminRegistrationAsset(req.params.slug, req.params.id, "receipt");
+    if (!receiptUrl) {
+      res.status(404).end();
+      return;
+    }
+    const file = await photoStorage.streamPaymentQr(receiptUrl);
+    if (!file) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Cache-Control", "private, max-age=120");
+    res.send(file.buffer);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+app.get("/api/admin/tournaments/:slug/ledger", requireSuperadmin, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const rows = await ledger.listEntries(db.query, loaded.row.id);
+    const summary = await ledger.summarize(db.query, loaded.row.id);
+    res.json({
+      summary,
+      entries: rows.map((row) => ledger.entryToAdmin(row))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post(
+  "/api/admin/tournaments/:slug/ledger/sync-registrations",
+  requireSuperadmin,
+  async (req, res) => {
+    try {
+      const loaded = await db.loadTournament(req.params.slug);
+      if (!loaded) {
+        res.status(404).json({ error: "Tournament not found" });
+        return;
+      }
+      const added = await ledger.syncPaidRegistrations(db.query, loaded.row.id);
+      const rows = await ledger.listEntries(db.query, loaded.row.id);
+      const summary = await ledger.summarize(db.query, loaded.row.id);
+      res.json({
+        added,
+        summary,
+        entries: rows.map((row) => ledger.entryToAdmin(row))
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/tournaments/:slug/ledger",
+  requireSuperadmin,
+  withUpload("attachment"),
+  async (req, res) => {
+    try {
+      const loaded = await db.loadTournament(req.params.slug);
+      if (!loaded) {
+        res.status(404).json({ error: "Tournament not found" });
+        return;
+      }
+      const adminId = req.session.admin && req.session.admin.id;
+      const entryId = await ledger.addManualEntry(db.query, loaded.row.id, adminId, {
+        entryType: req.body.entryType,
+        amount: req.body.amount,
+        description: req.body.description,
+        occurredAt: req.body.occurredAt
+      }, req.file || null);
+      const row = await ledger.fetchEntryWithContext(db.query, loaded.row.id, entryId);
+      res.status(201).json({ entry: ledger.entryToAdmin(row) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+app.patch(
+  "/api/admin/tournaments/:slug/ledger/:entryId",
+  requireSuperadmin,
+  withUpload("attachment"),
+  async (req, res) => {
+    try {
+      const loaded = await db.loadTournament(req.params.slug);
+      if (!loaded) {
+        res.status(404).json({ error: "Tournament not found" });
+        return;
+      }
+      const entryId = Number(req.params.entryId);
+      if (!Number.isFinite(entryId)) {
+        res.status(400).json({ error: "Invalid entry" });
+        return;
+      }
+      await ledger.updateManualEntry(
+        db.query,
+        loaded.row.id,
+        entryId,
+        {
+          entryType: req.body.entryType,
+          amount: req.body.amount,
+          description: req.body.description,
+          occurredAt: req.body.occurredAt
+        },
+        req.file || null
+      );
+      const row = await ledger.fetchEntryWithContext(db.query, loaded.row.id, entryId);
+      res.json({ entry: ledger.entryToAdmin(row) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+app.delete("/api/admin/tournaments/:slug/ledger/:entryId", requireSuperadmin, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const entryId = Number(req.params.entryId);
+    if (!Number.isFinite(entryId)) {
+      res.status(400).json({ error: "Invalid entry" });
+      return;
+    }
+    await ledger.deleteManualEntry(db.query, loaded.row.id, entryId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/tournaments/:slug/ledger/:entryId/attachment", requireSuperadmin, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const entryId = Number(req.params.entryId);
+    if (!Number.isFinite(entryId)) {
+      res.status(400).json({ error: "Invalid entry" });
+      return;
+    }
+    await sendLedgerEntryAttachment(res, loaded.row.id, entryId);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+app.get("/api/admin/tournaments/:slug/registrations", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const result = await db.query(
+      `SELECT r.registration_number, r.category, r.extra_fields, r.status, r.registered_at,
+              t.slug, p.full_name, p.date_of_birth, p.flat_number, p.whatsapp_number, p.photo_url,
+              p.cricheroes_url, p.instagram_url,
+              pref.skill, pref.suggested_jersey_number, pref.jersey_size, pref.sleeve_type,
+              pay.payment_status, pay.verification_status, pay.receipt_url, pay.receipt_upi_ref, pay.reject_reason
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       JOIN players p ON p.id = r.player_id
+       LEFT JOIN player_preferences pref ON pref.player_id = p.id
+       LEFT JOIN payments pay ON pay.registration_id = r.id
+       WHERE t.slug = $1
+       ORDER BY r.registered_at DESC`,
+      [req.params.slug]
+    );
+    res.json({ registrations: result.rows.map(db.registrationToClient) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function applySubmittedReceipt(registrationId, receiptFile, upiRef) {
+  let receiptUrl = null;
+  if (receiptFile) {
+    receiptUrl = await photoStorage.saveReceipt(registrationId, receiptFile);
+  }
+  await db.query(
+    `UPDATE payments
+     SET receipt_url = COALESCE($2, receipt_url),
+         receipt_upi_ref = CASE WHEN $3::text IS NOT NULL AND $3 <> '' THEN $3 ELSE receipt_upi_ref END,
+         verification_status = 'SUBMITTED',
+         reject_reason = NULL,
+         gateway = COALESCE(NULLIF(gateway, ''), 'MANUAL_QR')
+     WHERE registration_id = $1`,
+    [registrationId, receiptUrl, upiRef || null]
+  );
+  await db.query(
+    "UPDATE registrations SET status = 'RECEIPT_SUBMITTED' WHERE id = $1",
+    [registrationId]
+  );
+}
+
+app.post(
+  "/api/admin/tournaments/:slug/registrations/:id/receipt",
+  requireAdmin,
+  requireTournamentAccess,
+  withUpload("receipt"),
+  async (req, res) => {
+    try {
+      const registrationNumber = String(req.params.id || "").trim();
+      const row = await findRegistrationPayment(req.params.slug, registrationNumber);
+      if (!row) {
+        if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+        res.status(404).json({ error: "Registration not found" });
+        return;
+      }
+      if (row.payment_status === "PAID" || row.registration_status === "PAID") {
+        if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+        res.status(400).json({ error: "Registration is already confirmed" });
+        return;
+      }
+      const upiRef = String(req.body.upiRef || req.body.upi_ref || "").trim();
+      if (!req.file && !upiRef) {
+        res.status(400).json({ error: "Choose a receipt image or enter a UPI reference" });
+        return;
+      }
+      await applySubmittedReceipt(row.registration_id, req.file || null, upiRef);
+      res.json({ record: await findRegistration(req.params.slug, registrationNumber) });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/tournaments/:slug/registrations/:id/photo",
+  requireAdmin,
+  requireTournamentAccess,
+  withUpload("photo"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: "Choose a photo" });
+        return;
+      }
+      const registrationNumber = String(req.params.id || "").trim();
+      const found = await db.query(
+        `SELECT p.id
+         FROM registrations r
+         JOIN tournaments t ON t.id = r.tournament_id
+         JOIN players p ON p.id = r.player_id
+         WHERE t.slug = $1 AND r.registration_number = $2`,
+        [req.params.slug, registrationNumber]
+      );
+      if (!found.rows[0]) {
+        if (req.file.path) fs.unlink(req.file.path, () => {});
+        res.status(404).json({ error: "Registration not found" });
+        return;
+      }
+      const photoUrl = await photoStorage.savePlayerPhoto(found.rows[0].id, req.file);
+      await db.query("UPDATE players SET photo_url = $2, updated_at = NOW() WHERE id = $1", [
+        found.rows[0].id,
+        photoUrl
+      ]);
+      res.json({ record: await findRegistration(req.params.slug, registrationNumber), photoUrl });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+app.post("/api/admin/tournaments/:slug/registrations/:id/approve", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const record = await markRegistrationPaid(req.params.slug, req.params.id, "MANUAL_QR", null, null);
+    if (!record) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    notifications.notifyConfirmed(loaded.tournament, record).catch(() => {});
+    res.json({ record });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/admin/tournaments/:slug/registrations/:id/reject", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const reason = String(req.body.reason || "Receipt could not be verified").trim();
+    const row = await findRegistrationPayment(req.params.slug, req.params.id);
+    if (!row) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    await db.query(
+      `UPDATE payments
+       SET verification_status = 'REJECTED', reject_reason = $2
+       WHERE registration_id = $1`,
+      [row.registration_id, reason]
+    );
+    await db.query(
+      "UPDATE registrations SET status = 'RECEIPT_REJECTED' WHERE id = $1",
+      [row.registration_id]
+    );
+    const record = await findRegistration(req.params.slug, req.params.id);
+    notifications.notifyRejected(loaded.tournament, record, reason).catch(() => {});
+    res.json({ record });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/admin/tournaments/:slug/registrations/:id", requireSuperadmin, async (req, res) => {
+  try {
+    const registrationId = String(req.params.id || "").trim();
+    if (!registrationId) {
+      res.status(400).json({ error: "Registration id required" });
+      return;
+    }
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const found = await db.query(
+      `SELECT r.id
+       FROM registrations r
+       WHERE r.tournament_id = $1 AND r.registration_number = $2`,
+      [loaded.row.id, registrationId]
+    );
+    if (!found.rows[0]) {
+      res.status(404).json({ error: "Registration not found" });
+      return;
+    }
+    await ledger.reverseRegistrationCredit(db.query, loaded.row.id, found.rows[0].id);
+    await db.query(
+      "DELETE FROM registrations WHERE tournament_id = $1 AND registration_number = $2",
+      [loaded.row.id, registrationId]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/admin/tournaments/:slug/registrations", requireSuperadmin, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    await ledger.reverseAllPaidRegistrations(db.query, loaded.row.id);
+    await db.query("DELETE FROM registrations WHERE tournament_id = $1", [loaded.row.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/admin/tournaments/:slug/registrations.csv", requireAdmin, requireTournamentAccess, async (req, res) => {
+  try {
+    const loaded = await db.loadTournament(req.params.slug);
+    if (!loaded) {
+      res.status(404).json({ error: "Tournament not found" });
+      return;
+    }
+    const result = await db.query(
+      `SELECT r.registration_number, r.category, r.extra_fields, r.status, r.registered_at,
+              t.slug, t.name AS tournament_name, p.full_name, p.date_of_birth, p.flat_number, p.whatsapp_number, p.photo_url,
+              p.cricheroes_url, p.instagram_url,
+              pref.skill, pref.suggested_jersey_number, pref.jersey_size, pref.sleeve_type,
+              pay.payment_status
+       FROM registrations r
+       JOIN tournaments t ON t.id = r.tournament_id
+       JOIN players p ON p.id = r.player_id
+       LEFT JOIN player_preferences pref ON pref.player_id = p.id
+       LEFT JOIN payments pay ON pay.registration_id = r.id
+       WHERE t.slug = $1
+       ORDER BY r.registered_at DESC`,
+      [req.params.slug]
+    );
+    const customCols = settingsUtil.customFormFields(loaded.tournament);
+    const header = [
+      "Tournament", "Registration ID", "Name", "Flat", "Category", "DOB", "WhatsApp", "Skill", "Jersey",
+      "Size", "Sleeve", "CricHeroes", "Instagram", "Photo", "Created At", "Payment Status"
+    ].concat(customCols.map((col) => col.label));
+    const lines = [header.map(csvEscape).join(",")].concat(
+      result.rows.map((row) => {
+        const rec = db.registrationToClient(row);
+        const base = [
+          row.tournament_name, rec.id, rec.name, rec.flat, rec.category, rec.dob, rec.phone, rec.skill, rec.jersey,
+          rec.size, rec.sleeve, rec.cricheroes, rec.instagram, rec.photoUrl, rec.createdAt, rec.paymentStatus
+        ];
+        customCols.forEach((col) => {
+          base.push((rec.customFields && rec.customFields[col.id]) || "");
+        });
+        return base.map(csvEscape).join(",");
+      })
+    );
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="${req.params.slug}-registrations.csv"`);
+    res.send(lines.join("\n"));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function csvEscape(value) {
+  return `"${String(value == null ? "" : value).replaceAll('"', '""')}"`;
+}
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  if (err instanceof multer.MulterError || /image|upload|file/i.test(String(err.message || ""))) {
+    res.status(400).json({ error: err.message || "Upload failed" });
+    return;
+  }
+  next(err);
+});
+
+app.use(express.static(siteRoot, { index: false }));
+
+async function start() {
+  const host = process.env.HOST || "0.0.0.0";
+  app.listen(PORT, host, () => {
+    console.log(`Crickipedia Phase 2 http://${host === "0.0.0.0" ? "localhost" : host}:${PORT}`);
+  });
+  setImmediate(function () {
+    try {
+      const rebuilt = srplStats.rebuildAll();
+      if (rebuilt.length) {
+        console.log(`SRPL stats: rebuilt ${rebuilt.length} leaderboard bundle(s).`);
+      }
+    } catch (err) {
+      console.error("SRPL stats rebuild:", err.message);
+    }
+  });
+  try {
+    await db.connect();
+    await db.migrate();
+    await db.seed();
+    await admins.seedSuperadminFromEnv(db.query, ADMIN_USERNAME, ADMIN_PASSWORD);
+    await photoStorage.init();
+  } catch (err) {
+    console.error("Database/storage startup failed:", err.message);
+    console.error("Fix DATABASE_URL on the server. /api/ping and WhatsApp webhook verify may still work.");
+  }
+}
+
+start().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

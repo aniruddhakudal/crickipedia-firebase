@@ -1,0 +1,9 @@
+node_modules
+data/*
+!data/shankeshwaram/
+!data/celebria/
+uploads
+.git
+.env
+*.md
+deploy
